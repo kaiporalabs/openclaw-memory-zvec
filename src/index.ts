@@ -92,6 +92,42 @@ function parsePositiveIntegerOption(value: string | undefined, flag: string): nu
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * `api.resolvePath` is typed as `string` but some runtimes return `undefined` or `""`.
+ * Produces a usable path for `path.dirname` / SQLite (never `undefined`).
+ */
+function coerceFilesystemPathForPlugin(
+  api: OpenClawPluginApi,
+  raw: string,
+  defaultRaw: string,
+): string {
+  const trimmed = raw.trim();
+  const source = trimmed.length > 0 ? raw : defaultRaw;
+  const sourceTrim = source.trim();
+  if (!sourceTrim) {
+    return path.resolve(defaultRaw.trim());
+  }
+  if (sourceTrim.includes("://")) {
+    return sourceTrim;
+  }
+  let resolved = api.resolvePath(source);
+  if (typeof resolved === "string" && resolved.trim().length > 0) {
+    return resolved;
+  }
+  if (path.isAbsolute(sourceTrim)) {
+    return path.resolve(sourceTrim);
+  }
+  resolved = api.resolvePath(defaultRaw);
+  if (typeof resolved === "string" && resolved.trim().length > 0) {
+    return resolved;
+  }
+  const defTrim = defaultRaw.trim();
+  if (path.isAbsolute(defTrim)) {
+    return path.resolve(defTrim);
+  }
+  return path.resolve(sourceTrim);
+}
+
+/**
  * Resolve the Zvec data directory for `getMemorySearchManager` (status/CLI/doctor).
  * Replays registration-time resolution, then tolerates `api.resolvePath` returning empty (CLI/sandbox edge cases).
  */
@@ -100,10 +136,10 @@ function resolveZvecRootForMemoryManager(params: {
   api: OpenClawPluginApi;
   registrationDbPath: string;
   registrationResolvedRoot: string;
-}): string | null {
+}): string {
   const trimmed = params.rawDb.trim();
   if (!trimmed) {
-    return null;
+    return coerceFilesystemPathForPlugin(params.api, params.rawDb, resolveDefaultDbPath());
   }
   if (trimmed.includes("://")) {
     return trimmed;
@@ -125,9 +161,11 @@ function resolveZvecRootForMemoryManager(params: {
   }
   if (trimmed === params.registrationDbPath.trim()) {
     const root = params.registrationResolvedRoot.trim();
-    return root.length > 0 ? root : null;
+    if (root.length > 0) {
+      return root;
+    }
   }
-  return null;
+  return coerceFilesystemPathForPlugin(params.api, params.rawDb, resolveDefaultDbPath());
 }
 
 export default definePluginEntry({
@@ -214,10 +252,11 @@ export default definePluginEntry({
             typeof effectiveCfg.sqlitePath === "string" && effectiveCfg.sqlitePath.trim().length > 0
               ? effectiveCfg.sqlitePath
               : resolveDefaultSqlitePath(agentId);
-          let resolvedSqlitePath = rawSqlite.includes("://") ? rawSqlite : api.resolvePath(rawSqlite);
-          if (typeof resolvedSqlitePath !== "string" || !resolvedSqlitePath.trim()) {
-            resolvedSqlitePath = api.resolvePath(resolveDefaultSqlitePath(agentId));
-          }
+          const resolvedSqlitePath = coerceFilesystemPathForPlugin(
+            api,
+            rawSqlite,
+            resolveDefaultSqlitePath(agentId),
+          );
           const rawDb =
             typeof effectiveCfg.dbPath === "string" && effectiveCfg.dbPath.trim().length > 0
               ? effectiveCfg.dbPath
@@ -234,16 +273,22 @@ export default definePluginEntry({
             registrationDbPath: dbPath,
             registrationResolvedRoot: resolvedDataRoot,
           });
-          if (!resolvedZvecRoot) {
+          if (!resolvedZvecRoot.trim()) {
             return {
               manager: null,
               error:
                 "memory-zvec: dbPath resolved to empty path (check plugins.entries.memory-zvec.config.dbPath is non-empty or unset; avoid dbPath: \"\")",
             };
           }
+          const workspaceDirRaw = api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId);
+          const workspaceDir =
+            typeof workspaceDirRaw === "string" && workspaceDirRaw.trim().length > 0
+              ? workspaceDirRaw
+              : path.resolve(process.cwd());
+
           const manager = new ZvecSqliteMemoryManager(
             { ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot },
-            api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId),
+            workspaceDir,
             agentId,
             createEmbeddings(api, effectiveCfg),
             new MemoryZvecStore(resolvedZvecRoot, vectorDim),
