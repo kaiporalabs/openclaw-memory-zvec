@@ -54,10 +54,24 @@ More detail: [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ## Configuration
 
-1. Select the plugin for the **memory** slot (exact config keys follow your OpenClaw version; see [Building plugins](https://docs.openclaw.ai/plugins/building-plugins)).
-2. Add plugin config under the entry id **`memory-zvec`** (must match `openclaw.plugin.json`). The **npm package name** (`@kaiporalabs/openclaw-memory-zvec`) is only used for installation; the config entry id remains **`memory-zvec`**.
+OpenClaw reads the main config from **`~/.openclaw/openclaw.json`** (unless you override state dir). The plugin system uses:
 
-### Minimal Ollama example
+- **`plugins.slots.memory`** — string plugin id that owns the exclusive memory slot (`"none"` disables memory plugins).
+- **`plugins.entries.<pluginId>`** — per-plugin record: `enabled`, optional `hooks`, and **`config`** (plugin-specific payload).
+
+This matches the shipped schema (`plugins.slots` + strict `plugins.entries` records). See [Gateway configuration reference — Plugins](https://docs.openclaw.ai/gateway/configuration-reference#plugins) and [Memory LanceDB](https://docs.openclaw.ai/plugins/memory-lancedb) for the same entry layout with another memory plugin.
+
+**Non-bundled plugins:** OpenClaw blocks conversation hooks (`agent_end`, etc.) unless you set **`plugins.entries.<id>.hooks.allowConversationAccess: true`**. This plugin uses `before_prompt_build` (auto-recall) and `agent_end` (auto-capture). Set both hook flags below so recall/capture work; if you only use tools and disable auto-capture, `allowConversationAccess` is still safe to enable.
+
+If your config uses **`plugins.allow`** (allowlist), add **`"memory-zvec"`** to the list or the plugin will not load.
+
+After edits, restart the gateway:
+
+```bash
+openclaw gateway restart
+```
+
+### Full example (Ollama, aligned with OpenClaw `PluginEntryConfig`)
 
 Ensure [Ollama](https://ollama.com/) is running and the embedding model is pulled (e.g. `ollama pull nomic-embed-text`).
 
@@ -69,6 +83,11 @@ Ensure [Ollama](https://ollama.com/) is running and the embedding model is pulle
     },
     entries: {
       "memory-zvec": {
+        enabled: true,
+        hooks: {
+          allowPromptInjection: true,
+          allowConversationAccess: true,
+        },
         config: {
           embedding: {
             provider: "ollama",
@@ -84,15 +103,23 @@ Ensure [Ollama](https://ollama.com/) is running and the embedding model is pulle
 }
 ```
 
-`nomic-embed-text` is built into the plugin’s dimension map (**768**). For other models, set **`embedding.dimensions`** explicitly.
+`nomic-embed-text` is built into the plugin’s dimension map (**768**). For other models, set **`config.embedding.dimensions`** explicitly.
 
 ### OpenAI-compatible HTTP API (explicit API key)
 
 ```json5
 {
   plugins: {
+    slots: {
+      memory: "memory-zvec",
+    },
     entries: {
       "memory-zvec": {
+        enabled: true,
+        hooks: {
+          allowPromptInjection: true,
+          allowConversationAccess: true,
+        },
         config: {
           embedding: {
             provider: "openai",
@@ -106,12 +133,22 @@ Ensure [Ollama](https://ollama.com/) is running and the embedding model is pulle
 }
 ```
 
-When `provider` is `openai` **and** `apiKey` is set in plugin config, the plugin uses the OpenAI SDK against the default or `embedding.baseUrl` endpoint. For gateway-managed auth without a plugin-local key, use another provider id (e.g. `github-copilot`) or rely on the adapter’s normal config as documented for your OpenClaw setup.
+When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**, the plugin uses the OpenAI SDK against the default or `config.embedding.baseUrl`. For gateway-managed auth without a plugin-local key, use another provider id (e.g. `github-copilot`) and omit `apiKey`, per OpenClaw’s provider docs.
 
-### Optional keys
+### Entry fields (`plugins.entries.memory-zvec.*`)
+
+| Field | Description |
+| --- | --- |
+| `enabled` | Set `true` so the entry is active (recommended). |
+| `hooks.allowPromptInjection` | Must be `true` for `before_prompt_build` / auto-recall (OpenClaw blocks prompt mutation hooks when `false`). |
+| `hooks.allowConversationAccess` | **Required `true` for this npm plugin** so `agent_end` (auto-capture) is registered. |
+| `config` | Plugin-specific settings (embedding, paths, autoRecall, …). |
+
+### Plugin `config` keys (`plugins.entries.memory-zvec.config.*`)
 
 | Key | Description |
 | --- | --- |
+| `embedding` | Provider/model/baseUrl/apiKey/dimensions (see `openclaw.plugin.json` / manifest). |
 | `dbPath` | Data root (default `~/.openclaw/memory/zvec`). Holds the Zvec collection directory and `memory-ids.json`. |
 | `autoRecall` | Inject top memories before the model runs (default `true`). |
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
@@ -134,6 +171,7 @@ openclaw memory-zvec stats
 
 ## References
 
+- [OpenClaw — Gateway configuration reference](https://docs.openclaw.ai/gateway/configuration-reference)
 - [OpenClaw — Building plugins](https://docs.openclaw.ai/plugins/building-plugins)
 - [Zvec Node binding](https://github.com/zvec-ai/zvec-node)
 - [Zvec project](https://github.com/alibaba/zvec)

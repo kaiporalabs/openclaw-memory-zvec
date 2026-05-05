@@ -25,3 +25,5 @@ Users install with:
 ```bash
 openclaw plugins install @kaiporalabs/openclaw-memory-zvec
 ```
+
+They must add a **`plugins.entries.memory-zvec`** block with nested **`config`** (and hook flags for non-bundled plugins). See the [README configuration section](../README.md#configuration).
