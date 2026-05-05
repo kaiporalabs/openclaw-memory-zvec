@@ -22,6 +22,7 @@ export declare const MEMORY_CATEGORIES: readonly ["preference", "fact", "decisio
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 export declare const DEFAULT_CAPTURE_MAX_CHARS = 500;
 export declare const DEFAULT_RECALL_MAX_CHARS = 1000;
+export declare function resolveDefaultDbPath(): string;
 /** Default SQLite path for chunk metadata + FTS (`~/.openclaw/memory/<agentId>.sqlite`). */
 export declare function resolveDefaultSqlitePath(agentId: string): string;
 export declare function vectorDimsForModel(model: string): number;

@@ -37,3 +37,7 @@ The **status self-test** (paths, SQLite, Zvec, embedding ping) runs when the hos
 ## CLI (`memory-zvec` vs `memory`)
 
 After install, operators can run **`openclaw memory-zvec status`** to print the full manager status JSON (including `custom.memoryZvecStatusSelfTest`) without relying on the shared **`memory`** command root, which another bundled plugin may own. See [README — CLI](../README.md#cli).
+
+## Config pitfalls
+
+- **`dbPath` / `sqlitePath` must not be empty strings** in `openclaw.json` unless you want defaults: use a real path or **omit** the key. Empty/whitespace values are normalized to defaults in current releases; see [README — Troubleshooting](../README.md#troubleshooting).

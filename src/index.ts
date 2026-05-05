@@ -20,6 +20,7 @@ import type {
 import { createEmbeddings } from "./embeddings.js";
 import {
   memoryConfigSchema,
+  resolveDefaultDbPath,
   resolveDefaultSqlitePath,
   vectorDimsForModel,
   type MemoryCategory,
@@ -188,10 +189,16 @@ export default definePluginEntry({
           }
           let resolvedZvecRoot = rawDb.includes("://") ? rawDb : api.resolvePath(rawDb);
           if (typeof resolvedZvecRoot !== "string" || !resolvedZvecRoot.trim()) {
-            return {
-              manager: null,
-              error: "memory-zvec: dbPath resolved to empty path",
-            };
+            const fallbackRoot = api.resolvePath(resolveDefaultDbPath());
+            if (typeof fallbackRoot === "string" && fallbackRoot.trim().length > 0) {
+              resolvedZvecRoot = fallbackRoot;
+            } else {
+              return {
+                manager: null,
+                error:
+                  "memory-zvec: dbPath resolved to empty path (check plugins.entries.memory-zvec.config.dbPath is non-empty or unset; avoid dbPath: \"\")",
+              };
+            }
           }
           const manager = new ZvecSqliteMemoryManager(
             { ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot },

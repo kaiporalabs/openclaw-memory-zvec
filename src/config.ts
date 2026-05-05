@@ -30,7 +30,7 @@ const DEFAULT_MODEL = "nomic-embed-text";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 export const DEFAULT_RECALL_MAX_CHARS = 1000;
 
-function resolveDefaultDbPath(): string {
+export function resolveDefaultDbPath(): string {
   return join(homedir(), ".openclaw", "memory", "zvec");
 }
 
@@ -148,6 +148,9 @@ export const memoryConfigSchema = {
               throw new Error("dreaming config must be an object");
             })();
 
+    const dbPathRaw = typeof cfg.dbPath === "string" ? cfg.dbPath.trim() : "";
+    const sqlitePathRaw = typeof cfg.sqlitePath === "string" ? cfg.sqlitePath.trim() : "";
+
     return {
       embedding: {
         provider,
@@ -158,10 +161,10 @@ export const memoryConfigSchema = {
         dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
       },
       dreaming,
-      dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
+      dbPath: dbPathRaw.length > 0 ? dbPathRaw : DEFAULT_DB_PATH,
       sqlitePath:
-        typeof cfg.sqlitePath === "string"
-          ? cfg.sqlitePath
+        sqlitePathRaw.length > 0
+          ? sqlitePathRaw
           : resolveDefaultSqlitePath(opts?.agentId ?? "main"),
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,

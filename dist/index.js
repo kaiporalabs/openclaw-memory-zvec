@@ -12,7 +12,7 @@ import { Type } from "typebox";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createEmbeddings } from "./embeddings.js";
-import { memoryConfigSchema, resolveDefaultSqlitePath, vectorDimsForModel, MEMORY_CATEGORIES, } from "./config.js";
+import { memoryConfigSchema, resolveDefaultDbPath, resolveDefaultSqlitePath, vectorDimsForModel, MEMORY_CATEGORIES, } from "./config.js";
 import { DEFAULT_AUTO_RECALL_TIMEOUT_MS, extractLatestUserText, extractUserTextContent, formatRelevantMemoriesContext, messageFingerprint, normalizeRecallQuery, resolveAutoCaptureStartIndex, shouldCapture, detectCategory, } from "./runtime-helpers.js";
 import { MemoryZvecStore } from "./zvec-store.js";
 import { ZvecSqliteMemoryManager } from "./memory-manager.js";
@@ -141,10 +141,16 @@ export default definePluginEntry({
                     }
                     let resolvedZvecRoot = rawDb.includes("://") ? rawDb : api.resolvePath(rawDb);
                     if (typeof resolvedZvecRoot !== "string" || !resolvedZvecRoot.trim()) {
-                        return {
-                            manager: null,
-                            error: "memory-zvec: dbPath resolved to empty path",
-                        };
+                        const fallbackRoot = api.resolvePath(resolveDefaultDbPath());
+                        if (typeof fallbackRoot === "string" && fallbackRoot.trim().length > 0) {
+                            resolvedZvecRoot = fallbackRoot;
+                        }
+                        else {
+                            return {
+                                manager: null,
+                                error: "memory-zvec: dbPath resolved to empty path (check plugins.entries.memory-zvec.config.dbPath is non-empty or unset; avoid dbPath: \"\")",
+                            };
+                        }
                     }
                     const manager = new ZvecSqliteMemoryManager({ ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot }, api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId), agentId, createEmbeddings(api, effectiveCfg), new MemoryZvecStore(resolvedZvecRoot, vectorDim), api.logger);
                     if (params.purpose === "status") {

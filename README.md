@@ -223,12 +223,19 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | Key | Description |
 | --- | --- |
 | `embedding` | Provider/model/baseUrl/apiKey/dimensions (see `openclaw.plugin.json` / manifest). |
-| `dbPath` | Data root (default `~/.openclaw/memory/zvec`). Holds the Zvec collection directory and `memory-ids.json`. |
-| `sqlitePath` | Optional explicit SQLite path for chunk metadata + FTS. Defaults to `~/.openclaw/memory/<agentId>.sqlite` to align with builtin store paths. |
+| `dbPath` | Data root (default `~/.openclaw/memory/zvec`). Holds the Zvec collection directory and `memory-ids.json`. **Do not set `dbPath` to `""` or whitespace** — that used to yield “dbPath resolved to empty path”; empty values are now treated as “use default”. Prefer omitting the key entirely. |
+| `sqlitePath` | Optional explicit SQLite path for chunk metadata + FTS. Defaults to `~/.openclaw/memory/<agentId>.sqlite`. **Empty or whitespace-only values are ignored** (defaults apply); do not set `"sqlitePath": ""` unless you intend the default. |
 | `autoRecall` | Inject top memories before the model runs (default `true`). |
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
 | `captureMaxChars` / `recallMaxChars` | Length limits for capture and recall query text. |
 | `dreaming` | Reserved for OpenClaw dreaming integration when this plugin owns the memory slot. |
+
+### Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| **`memory-zvec: dbPath resolved to empty path`** (older builds) | Remove **`dbPath: ""`** from config, or set a real path / `~/.openclaw/memory/zvec`. Current versions treat empty `dbPath` / `sqlitePath` as “use default” and fall back if `resolvePath` returns empty. |
+| **`memory-zvec: dbPath missing after config resolve`** | Corrupt or missing merged config; ensure `plugins.entries["memory-zvec"].config` parses and includes valid `embedding`. |
 
 ## CLI
 
