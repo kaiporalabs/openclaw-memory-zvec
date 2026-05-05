@@ -1,0 +1,103 @@
+{
+  "id": "memory-zvec",
+  "activation": {
+    "onStartup": false
+  },
+  "kind": "memory",
+  "contracts": {
+    "tools": ["memory_forget", "memory_recall", "memory_store"]
+  },
+  "uiHints": {
+    "embedding.apiKey": {
+      "label": "Embedding API Key",
+      "sensitive": true,
+      "placeholder": "sk-...",
+      "help": "Optional API key for OpenAI-compatible embedding HTTP APIs; omit for gateway auth or local providers (e.g. Ollama)"
+    },
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "placeholder": "ollama",
+      "help": "OpenClaw embedding adapter id: ollama, openai, github-copilot, etc."
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "nomic-embed-text",
+      "help": "Model id for the chosen provider (must match embedding dimensions)"
+    },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "http://127.0.0.1:11434/v1",
+      "help": "Optional OpenAI-compatible embeddings base URL (typical for Ollama)",
+      "advanced": true
+    },
+    "embedding.dimensions": {
+      "label": "Dimensions",
+      "placeholder": "768",
+      "help": "Required when the model is not in the built-in dimension map (set explicitly for most Ollama models)",
+      "advanced": true
+    },
+    "dbPath": {
+      "label": "Data directory",
+      "placeholder": "~/.openclaw/memory/zvec",
+      "advanced": true,
+      "help": "Directory for the Zvec collection and id index (local disk)"
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Capture heuristically important user lines after each successful turn"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Inject top semantic memories before the model runs"
+    },
+    "dreaming": {
+      "label": "Dreaming",
+      "help": "Optional dreaming config when this plugin owns the memory slot"
+    },
+    "captureMaxChars": {
+      "label": "Capture Max Chars",
+      "help": "Maximum user message length considered for auto-capture",
+      "advanced": true,
+      "placeholder": "500"
+    },
+    "recallMaxChars": {
+      "label": "Recall Query Max Chars",
+      "help": "Truncate text before embedding for recall",
+      "advanced": true,
+      "placeholder": "1000"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": { "type": "string" },
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "baseUrl": { "type": "string" },
+          "dimensions": { "type": "number" }
+        }
+      },
+      "dbPath": { "type": "string" },
+      "autoCapture": { "type": "boolean" },
+      "autoRecall": { "type": "boolean" },
+      "dreaming": { "type": "object" },
+      "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      },
+      "recallMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      }
+    },
+    "required": ["embedding"]
+  }
+}

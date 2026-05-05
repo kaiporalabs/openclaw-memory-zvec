@@ -1,0 +1,61 @@
+{
+  "name": "openclaw-memory-zvec",
+  "version": "1.0.0",
+  "description": "OpenClaw long-term memory plugin backed by Alibaba Zvec (dense vector ANN)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "memory",
+    "zvec",
+    "vector",
+    "embeddings",
+    "ollama"
+  ],
+  "author": "Kaipora Labs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kaiporalabs/openclaw-memory-zvec.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@zvec/zvec": "^0.3.2",
+    "openai": "^6.35.0",
+    "typebox": "1.1.37"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "openclaw": "2026.5.3-1",
+    "typescript": "^5.9.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.2"
+    },
+    "install": {
+      "npmSpec": "openclaw-memory-zvec",
+      "defaultChoice": "npm"
+    }
+  }
+}
