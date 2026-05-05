@@ -1,3 +1,5 @@
+import path from "node:path";
+
 /**
  * OpenClaw Memory (Zvec) — long-term memory with local ANN via `@zvec/zvec`.
  *
@@ -88,6 +90,45 @@ function parsePositiveIntegerOption(value: string | undefined, flag: string): nu
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve the Zvec data directory for `getMemorySearchManager` (status/CLI/doctor).
+ * Replays registration-time resolution, then tolerates `api.resolvePath` returning empty (CLI/sandbox edge cases).
+ */
+function resolveZvecRootForMemoryManager(params: {
+  rawDb: string;
+  api: OpenClawPluginApi;
+  registrationDbPath: string;
+  registrationResolvedRoot: string;
+}): string | null {
+  const trimmed = params.rawDb.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.includes("://")) {
+    return trimmed;
+  }
+  let resolved = params.api.resolvePath(params.rawDb);
+  if (typeof resolved === "string" && resolved.trim().length > 0) {
+    return resolved;
+  }
+  if (path.isAbsolute(trimmed)) {
+    return path.resolve(trimmed);
+  }
+  const fromDefault = params.api.resolvePath(resolveDefaultDbPath());
+  if (typeof fromDefault === "string" && fromDefault.trim().length > 0) {
+    return fromDefault;
+  }
+  const defaultRaw = resolveDefaultDbPath();
+  if (path.isAbsolute(defaultRaw)) {
+    return path.resolve(defaultRaw);
+  }
+  if (trimmed === params.registrationDbPath.trim()) {
+    const root = params.registrationResolvedRoot.trim();
+    return root.length > 0 ? root : null;
+  }
+  return null;
+}
 
 export default definePluginEntry({
   id: "memory-zvec",
@@ -187,18 +228,18 @@ export default definePluginEntry({
               error: "memory-zvec: dbPath missing after config resolve",
             };
           }
-          let resolvedZvecRoot = rawDb.includes("://") ? rawDb : api.resolvePath(rawDb);
-          if (typeof resolvedZvecRoot !== "string" || !resolvedZvecRoot.trim()) {
-            const fallbackRoot = api.resolvePath(resolveDefaultDbPath());
-            if (typeof fallbackRoot === "string" && fallbackRoot.trim().length > 0) {
-              resolvedZvecRoot = fallbackRoot;
-            } else {
-              return {
-                manager: null,
-                error:
-                  "memory-zvec: dbPath resolved to empty path (check plugins.entries.memory-zvec.config.dbPath is non-empty or unset; avoid dbPath: \"\")",
-              };
-            }
+          const resolvedZvecRoot = resolveZvecRootForMemoryManager({
+            rawDb,
+            api,
+            registrationDbPath: dbPath,
+            registrationResolvedRoot: resolvedDataRoot,
+          });
+          if (!resolvedZvecRoot) {
+            return {
+              manager: null,
+              error:
+                "memory-zvec: dbPath resolved to empty path (check plugins.entries.memory-zvec.config.dbPath is non-empty or unset; avoid dbPath: \"\")",
+            };
           }
           const manager = new ZvecSqliteMemoryManager(
             { ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot },
