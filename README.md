@@ -1,6 +1,9 @@
-# openclaw-memory-zvec
+# @kaiporalabs/openclaw-memory-zvec
 
 Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw) using [**Zvec**](https://github.com/alibaba/zvec) via the official Node binding [`@zvec/zvec`](https://www.npmjs.com/package/@zvec/zvec). Vectors are indexed with an **HNSW** index and **cosine** distance; recall and capture behave like the bundled LanceDB memory plugin (tools + optional auto-recall / auto-capture).
+
+**npm package:** `@kaiporalabs/openclaw-memory-zvec`  
+**OpenClaw plugin id:** `memory-zvec` (see `openclaw.plugin.json`)
 
 ## Features
 
@@ -17,10 +20,17 @@ Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw)
 
 ## Install
 
-### From npm (when published)
+### From npm (recommended)
 
 ```bash
-openclaw plugins install openclaw-memory-zvec
+openclaw plugins install @kaiporalabs/openclaw-memory-zvec
+```
+
+Equivalent:
+
+```bash
+npm install -g @kaiporalabs/openclaw-memory-zvec
+# then register the plugin in OpenClaw config per your setup
 ```
 
 ### From this GitHub repository
@@ -31,10 +41,21 @@ openclaw plugins install github:kaiporalabs/openclaw-memory-zvec
 
 If your installer checks out source without a prebuilt `dist/`, run `npm install && npm run build` in the clone first, or install from a release tarball that includes `dist/`.
 
+## Publishing (maintainers)
+
+The package is **scoped** under `@kaiporalabs`. `package.json` includes `"publishConfig": { "access": "public" }` so the first publish works as a public package:
+
+```bash
+npm login
+npm publish --access public
+```
+
+More detail: [docs/PUBLISHING.md](docs/PUBLISHING.md).
+
 ## Configuration
 
 1. Select the plugin for the **memory** slot (exact config keys follow your OpenClaw version; see [Building plugins](https://docs.openclaw.ai/plugins/building-plugins)).
-2. Add plugin config under the entry id **`memory-zvec`** (must match `openclaw.plugin.json`).
+2. Add plugin config under the entry id **`memory-zvec`** (must match `openclaw.plugin.json`). The **npm package name** (`@kaiporalabs/openclaw-memory-zvec`) is only used for installation; the config entry id remains **`memory-zvec`**.
 
 ### Minimal Ollama example
 
@@ -116,6 +137,7 @@ openclaw memory-zvec stats
 - [OpenClaw — Building plugins](https://docs.openclaw.ai/plugins/building-plugins)
 - [Zvec Node binding](https://github.com/zvec-ai/zvec-node)
 - [Zvec project](https://github.com/alibaba/zvec)
+- [Repository](https://github.com/kaiporalabs/openclaw-memory-zvec)
 
 ## License
 
