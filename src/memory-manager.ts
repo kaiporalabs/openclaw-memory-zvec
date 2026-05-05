@@ -1,3 +1,10 @@
+/**
+ * Hybrid memory search: SQLite + FTS for chunk metadata, Zvec for dense vectors, optional
+ * `pluginLog` (OpenClaw `api.logger`) for operational warnings — sync failures, vector-search leg
+ * failures (FTS fallback), and rich embedding probe errors via `formatErrorDiagnostic`.
+ *
+ * Diagnostics env vars for extra debug lines live in `debug-env.ts` / README “Diagnostics & logging”.
+ */
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +18,8 @@ import type {
   MemorySource,
   MemoryProviderStatus,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import { formatErrorDiagnostic } from "./error-diagnostic.js";
 import type { Embeddings } from "./embeddings.js";
 import type { MemoryConfig } from "./config.js";
 import { normalizeRecallQuery } from "./prompt-helpers.js";
@@ -135,6 +144,7 @@ export class ZvecSqliteMemoryManager implements MemorySearchManager {
     private readonly agentId: string,
     private readonly embeddings: Embeddings,
     private readonly zvec: MemoryZvecStore,
+    private readonly pluginLog?: PluginLogger,
   ) {
     this.db = openMemorySqlite({ sqlitePath: cfg.sqlitePath! });
   }
@@ -186,7 +196,7 @@ export class ZvecSqliteMemoryManager implements MemorySearchManager {
       this.lastEmbedProbe = { ok: true, checked: true, checkedAtMs: started };
       return this.lastEmbedProbe;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorDiagnostic(err);
       this.lastEmbedProbe = { ok: false, error: message, checked: true, checkedAtMs: started };
       return this.lastEmbedProbe;
     }
@@ -245,6 +255,9 @@ export class ZvecSqliteMemoryManager implements MemorySearchManager {
       try {
         this.db.exec("ROLLBACK");
       } catch {}
+      this.pluginLog?.warn(
+        `memory-zvec: sync failed [agent=${this.agentId}]: ${formatErrorDiagnostic(err)}`,
+      );
       throw err;
     }
   }
@@ -272,8 +285,10 @@ export class ZvecSqliteMemoryManager implements MemorySearchManager {
       const qVec = await this.embeddings.embed(normalizeRecallQuery(query, this.cfg.recallMaxChars));
       const z = await this.zvec.search(qVec, maxResults * 3, 0);
       vectorResults = z.map((r) => ({ id: r.entry.id, score: r.score }));
-    } catch {
-      // fallback to FTS only
+    } catch (err) {
+      this.pluginLog?.warn(
+        `memory-zvec: vector search leg failed (using FTS only) [agent=${this.agentId}]: ${formatErrorDiagnostic(err)}`,
+      );
     }
 
     // 2) FTS candidates.

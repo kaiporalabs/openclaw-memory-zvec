@@ -1,3 +1,8 @@
+/**
+ * Embedding clients for OpenAI-compatible HTTP APIs and OpenClaw memory embedding adapters.
+ * Failures propagate to callers (`ZvecSqliteMemoryManager`, hooks in `index.ts`), which log via
+ * `api.logger` and `formatErrorDiagnostic` — this module does not print to the console.
+ */
 import OpenAI from "openai";
 import { getMemoryEmbeddingProvider, } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";

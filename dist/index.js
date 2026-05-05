@@ -1,5 +1,12 @@
 /**
- * OpenClaw Memory (Zvec) — long-term memory with local ANN via @zvec/zvec.
+ * OpenClaw Memory (Zvec) — long-term memory with local ANN via `@zvec/zvec`.
+ *
+ * **Logging:** uses `api.logger` (`info`/`warn`/`debug`). Verbose debug lines require
+ * `OPENCLAW_MEMORY_ZVEC_DEBUG=1` or `DEBUG` containing `memory-zvec` — see `debug-env.ts` and the
+ * README section “Diagnostics & logging”.
+ *
+ * **Errors:** hooks use `formatErrorDiagnostic` so embedding/network failures are not truncated to
+ * `String(err)`.
  */
 import { Type } from "typebox";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -9,6 +16,8 @@ import { memoryConfigSchema, vectorDimsForModel, MEMORY_CATEGORIES, } from "./co
 import { DEFAULT_AUTO_RECALL_TIMEOUT_MS, extractLatestUserText, extractUserTextContent, formatRelevantMemoriesContext, messageFingerprint, normalizeRecallQuery, resolveAutoCaptureStartIndex, shouldCapture, detectCategory, } from "./runtime-helpers.js";
 import { MemoryZvecStore } from "./zvec-store.js";
 import { ZvecSqliteMemoryManager } from "./memory-manager.js";
+import { describeEmbeddingEndpoint, formatErrorDiagnostic } from "./error-diagnostic.js";
+import { isMemoryZvecDebug } from "./debug-env.js";
 function asRecord(value) {
     return value && typeof value === "object" && !Array.isArray(value)
         ? value
@@ -118,7 +127,7 @@ export default definePluginEntry({
                 const resolvedZvecRoot = effectiveCfg.dbPath.includes("://")
                     ? effectiveCfg.dbPath
                     : api.resolvePath(effectiveCfg.dbPath);
-                const manager = new ZvecSqliteMemoryManager({ ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot }, api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId), agentId, createEmbeddings(api, effectiveCfg), new MemoryZvecStore(resolvedZvecRoot, vectorDim));
+                const manager = new ZvecSqliteMemoryManager({ ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot }, api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId), agentId, createEmbeddings(api, effectiveCfg), new MemoryZvecStore(resolvedZvecRoot, vectorDim), api.logger);
                 if (params.purpose !== "status") {
                     await manager.sync({ reason: "open", force: false }).catch(() => undefined);
                 }
@@ -466,6 +475,9 @@ export default definePluginEntry({
             if (!event.prompt || event.prompt.length < 5) {
                 return undefined;
             }
+            if (isMemoryZvecDebug()) {
+                api.logger.debug?.(`memory-zvec: auto-recall (${describeEmbeddingEndpoint(currentCfg.embedding)})`);
+            }
             try {
                 const recallQuery = normalizeRecallQuery(extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
                     event.prompt, currentCfg.recallMaxChars);
@@ -492,7 +504,7 @@ export default definePluginEntry({
                 };
             }
             catch (err) {
-                api.logger.warn(`memory-zvec: recall failed: ${String(err)}`);
+                api.logger.warn(`memory-zvec: recall failed [${describeEmbeddingEndpoint(currentCfg.embedding)}]: ${formatErrorDiagnostic(err)}`);
             }
             return undefined;
         });
@@ -551,7 +563,8 @@ export default definePluginEntry({
                 }
             }
             catch (err) {
-                api.logger.warn(`memory-zvec: capture failed: ${String(err)}`);
+                const capCfg = resolveCurrentHookConfig("main");
+                api.logger.warn(`memory-zvec: capture failed [${describeEmbeddingEndpoint(capCfg.embedding)}]: ${formatErrorDiagnostic(err)}`);
             }
         });
         api.on("session_end", (event, ctx) => {
@@ -565,7 +578,7 @@ export default definePluginEntry({
         api.registerService({
             id: "memory-zvec",
             start: () => {
-                api.logger.info(`memory-zvec: active (data: ${resolvedDataRoot}, model: ${cfg.embedding.model})`);
+                api.logger.info(`memory-zvec: active (data: ${resolvedDataRoot}, ${describeEmbeddingEndpoint(cfg.embedding)})`);
             },
             stop: () => {
                 void db.close();

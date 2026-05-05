@@ -1,6 +1,6 @@
 # @kaiporalabs/openclaw-memory-zvec
 
-Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw) using [**Zvec**](https://github.com/alibaba/zvec) via the official Node binding [`@zvec/zvec`](https://www.npmjs.com/package/@zvec/zvec). Vectors are indexed with an **HNSW** index and **cosine** distance; recall and capture behave like the bundled LanceDB memory plugin (tools + optional auto-recall / auto-capture).
+Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw) using [**Zvec**](https://github.com/alibaba/zvec) via the official Node binding [`@zvec/zvec`](https://www.npmjs.com/package/@zvec/zvec). Vectors are indexed with an **HNSW** index and **cosine** distance; recall and capture follow the usual OpenClaw memory-plugin patterns (tools + optional auto-recall / auto-capture).
 
 **npm package:** `@kaiporalabs/openclaw-memory-zvec`  
 **OpenClaw plugin id:** `memory-zvec` (see `openclaw.plugin.json`)
@@ -37,6 +37,39 @@ openclaw status --all
 ```
 
 Use **`openclaw memory-zvec stats`** (or `list` / `search`) for plugin-local Zvec metrics regardless of `status` mode.
+
+## Diagnostics & logging
+
+Messages go through OpenClaw’s **`api.logger`** (`info`, `warn`, `error`, optional `debug`). Whether **`debug`** lines appear depends on the gateway/host log level.
+
+This plugin also formats **`Error.cause`** chains (for example `fetch failed` from embeddings) into **`warn`** lines so failures are visible without raw `String(err)`.
+
+### Environment variables
+
+| Variable | When set | Effect |
+| --- | --- | --- |
+| **`OPENCLAW_MEMORY_ZVEC_DEBUG`** | **`1`** | Enables extra **`logger.debug`** calls (for example right before auto-recall). |
+| **`DEBUG`** | contains substring **`memory-zvec`** | Same behavior as **`OPENCLAW_MEMORY_ZVEC_DEBUG=1`** (common `DEBUG` convention). |
+
+### Examples
+
+```bash
+# Enable debug lines for this plugin (session only)
+export OPENCLAW_MEMORY_ZVEC_DEBUG=1
+openclaw gateway restart
+```
+
+```bash
+# One-shot: run the CLI with diagnostics enabled (adjust to how you start OpenClaw)
+OPENCLAW_MEMORY_ZVEC_DEBUG=1 openclaw gateway run
+```
+
+```bash
+# Alternative using DEBUG (can combine with other DEBUG tokens)
+DEBUG="memory-zvec" OPENCLAW_MEMORY_ZVEC_DEBUG=1 openclaw gateway run
+```
+
+**Typical `warn` sources:** auto-recall / auto-capture failures, initial workspace **`sync`** failures, vector search leg failures (plugin falls back to SQLite FTS), embedding probe failures.
 
 ## Install
 
@@ -79,7 +112,7 @@ OpenClaw reads the main config from **`~/.openclaw/openclaw.json`** (unless you 
 - **`plugins.slots.memory`** — string plugin id that owns the exclusive memory slot (`"none"` disables memory plugins).
 - **`plugins.entries.<pluginId>`** — per-plugin record: `enabled`, optional `hooks`, and **`config`** (plugin-specific payload).
 
-This matches the shipped schema (`plugins.slots` + strict `plugins.entries` records). See [Gateway configuration reference — Plugins](https://docs.openclaw.ai/gateway/configuration-reference#plugins) and [Memory LanceDB](https://docs.openclaw.ai/plugins/memory-lancedb) for the same entry layout with another memory plugin.
+This matches the shipped schema (`plugins.slots` + strict `plugins.entries` records). See [Gateway configuration reference — Plugins](https://docs.openclaw.ai/gateway/configuration-reference#plugins).
 
 **Non-bundled plugins:** OpenClaw blocks conversation hooks (`agent_end`, etc.) unless you set **`plugins.entries.<id>.hooks.allowConversationAccess: true`**. This plugin uses `before_prompt_build` (auto-recall) and `agent_end` (auto-capture). Set both hook flags below so recall/capture work; if you only use tools and disable auto-capture, `allowConversationAccess` is still safe to enable.
 

@@ -27,3 +27,7 @@ openclaw plugins install @kaiporalabs/openclaw-memory-zvec
 ```
 
 They must add a **`plugins.entries.memory-zvec`** block with nested **`config`** (and hook flags for non-bundled plugins). See the [README configuration section](../README.md#configuration).
+
+## Diagnostics
+
+Environment variables for verbose plugin diagnostics (`OPENCLAW_MEMORY_ZVEC_DEBUG`, `DEBUG`) are documented in the [README](../README.md#diagnostics--logging).

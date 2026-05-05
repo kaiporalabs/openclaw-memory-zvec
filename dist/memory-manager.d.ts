@@ -1,4 +1,5 @@
 import type { MemoryEmbeddingProbeResult, MemoryReadResult, MemorySearchManager, MemorySearchResult, MemorySearchRuntimeDebug, MemorySource, MemoryProviderStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { Embeddings } from "./embeddings.js";
 import type { MemoryConfig } from "./config.js";
 import { MemoryZvecStore } from "./zvec-store.js";
@@ -8,10 +9,11 @@ export declare class ZvecSqliteMemoryManager implements MemorySearchManager {
     private readonly agentId;
     private readonly embeddings;
     private readonly zvec;
+    private readonly pluginLog?;
     private db;
     private initialized;
     private lastEmbedProbe;
-    constructor(cfg: MemoryConfig, workspaceDir: string, agentId: string, embeddings: Embeddings, zvec: MemoryZvecStore);
+    constructor(cfg: MemoryConfig, workspaceDir: string, agentId: string, embeddings: Embeddings, zvec: MemoryZvecStore, pluginLog?: PluginLogger | undefined);
     private ensureInitialized;
     status(): MemoryProviderStatus;
     probeVectorAvailability(): Promise<boolean>;
