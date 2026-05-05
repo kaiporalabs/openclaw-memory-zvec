@@ -33,3 +33,7 @@ They must add a **`plugins.entries.memory-zvec`** block with nested **`config`**
 Environment variables for verbose plugin diagnostics (`OPENCLAW_MEMORY_ZVEC_DEBUG`, `DEBUG`) are documented in the [README](../README.md#diagnostics--logging).
 
 The **status self-test** (paths, SQLite, Zvec, embedding ping) runs when the host opens the memory manager with `purpose: "status"`; see [README — Status probe](../README.md#status-probe-purpose-status).
+
+## CLI (`memory-zvec` vs `memory`)
+
+After install, operators can run **`openclaw memory-zvec status`** to print the full manager status JSON (including `custom.memoryZvecStatusSelfTest`) without relying on the shared **`memory`** command root, which another bundled plugin may own. See [README — CLI](../README.md#cli).

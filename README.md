@@ -11,7 +11,7 @@ Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw)
 - **OpenClaw slot parity:** provides `memory_search` + `memory_get`, and registers a full memory runtime capability so `openclaw status --all` and `openclaw memory ...` work when `plugins.slots.memory = "memory-zvec"`.
 - **Embeddings:** any OpenClaw [memory embedding provider](https://docs.openclaw.ai/) — **Ollama**, **OpenAI**, Copilot, etc. Defaults are tuned for **Ollama** (`nomic-embed-text`, 768-d).
 - **Storage:** local directory under `~/.openclaw/memory/zvec` by default (Zvec collection + `memory-ids.json` id list for listing).
-- **CLI:** `openclaw memory-zvec list|search|stats` (after the plugin is loaded).
+- **CLI:** `openclaw memory-zvec list|search|stats|status` (always under `memory-zvec`; see README for `memory` vs `memory-zvec`).
 - **Status self-test:** when OpenClaw opens the memory runtime with **`purpose: "status"`** (e.g. Control UI / `doctor.memory.status`), the plugin runs path checks, SQLite/FTS stats, Zvec `count()`, and a real **embedding provider ping**; results are exposed on the manager’s `status()` payload (see below).
 
 ## Requirements
@@ -232,11 +232,21 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 
 ## CLI
 
+Plugin-local commands (always registered under **`memory-zvec`**, no clash with bundled extensions):
+
 ```bash
 openclaw memory-zvec list --limit 20 --order-by-created-at
 openclaw memory-zvec search "your query" --limit 5
 openclaw memory-zvec stats
+openclaw memory-zvec status
+openclaw memory-zvec status --agent main
 ```
+
+**`memory-zvec status`** prints JSON from `MemorySearchManager.status()` after the **status self-test** (see [Status probe](#status-probe-purpose-status)), including `custom.memoryZvecStatusSelfTest` when present.
+
+### Why not `openclaw memory status`?
+
+OpenClaw only attaches **one** plugin CLI group per top-level command name. If **memory-core** (or another plugin) registers **`memory`** first, this plugin’s `memory status` / `memory search` handlers are **not** installed — you will still see `memory` in help, but it may be the other plugin’s implementation. Use **`openclaw memory-zvec status`** (and other `memory-zvec …` commands) for behaviour that is guaranteed to come from **memory-zvec**.
 
 ## Architecture notes
 

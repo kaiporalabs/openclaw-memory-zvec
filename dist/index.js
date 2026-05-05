@@ -426,13 +426,35 @@ export default definePluginEntry({
                 const count = await db.count();
                 console.log(`Total memories: ${count}`);
             });
+            root
+                .command("status")
+                .description("Print memory manager status as JSON (paths, SQLite, Zvec, embedding self-test). Use this if `openclaw memory status` is served by another plugin.")
+                .option("--agent <id>", "Agent id", "main")
+                .action(async (opts) => {
+                const agentId = typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+                const { manager, error } = await memoryRuntime.getMemorySearchManager({
+                    cfg: (api.runtime.config?.current?.() ?? api.config),
+                    agentId,
+                    purpose: "status",
+                });
+                if (!manager) {
+                    console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
+                    return;
+                }
+                try {
+                    console.log(JSON.stringify({ ok: true, status: manager.status() }, null, 2));
+                }
+                finally {
+                    await manager.close?.().catch(() => undefined);
+                }
+            });
         }, { commands: ["memory-zvec"] });
         // Provide a minimal `memory` CLI for parity with memory-core when this plugin owns the slot.
         api.registerCli(({ program }) => {
             const memory = program.command("memory").description("Search, inspect, and reindex memory");
             memory
                 .command("status")
-                .description("Show memory status")
+                .description("Show memory status (may be skipped if another plugin registered `memory` first)")
                 .action(async () => {
                 const { manager, error } = await memoryRuntime.getMemorySearchManager({
                     cfg: (api.runtime.config?.current?.() ?? api.config),
@@ -443,7 +465,12 @@ export default definePluginEntry({
                     console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
                     return;
                 }
-                console.log(JSON.stringify({ ok: true, status: manager.status() }, null, 2));
+                try {
+                    console.log(JSON.stringify({ ok: true, status: manager.status() }, null, 2));
+                }
+                finally {
+                    await manager.close?.().catch(() => undefined);
+                }
             });
             memory
                 .command("reindex")
