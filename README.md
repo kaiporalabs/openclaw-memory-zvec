@@ -12,6 +12,7 @@ Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw)
 - **Embeddings:** any OpenClaw [memory embedding provider](https://docs.openclaw.ai/) — **Ollama**, **OpenAI**, Copilot, etc. Defaults are tuned for **Ollama** (`nomic-embed-text`, 768-d).
 - **Storage:** local directory under `~/.openclaw/memory/zvec` by default (Zvec collection + `memory-ids.json` id list for listing).
 - **CLI:** `openclaw memory-zvec list|search|stats` (after the plugin is loaded).
+- **Status self-test:** when OpenClaw opens the memory runtime with **`purpose: "status"`** (e.g. Control UI / `doctor.memory.status`), the plugin runs path checks, SQLite/FTS stats, Zvec `count()`, and a real **embedding provider ping**; results are exposed on the manager’s `status()` payload (see below).
 
 ## Requirements
 
@@ -37,6 +38,26 @@ openclaw status --all
 ```
 
 Use **`openclaw memory-zvec stats`** (or `list` / `search`) for plugin-local Zvec metrics regardless of `status` mode.
+
+### Status probe (`purpose: "status"`)
+
+When the host resolves the active memory plugin for **status** (not for a normal tool turn), this plugin runs **`runStatusSelfTest()`** once per manager instance. It verifies, among other things:
+
+| Check | What it means |
+| --- | --- |
+| **Workspace directory** | Agent workspace exists and is readable (needed to index `MEMORY.md`, `memory/`, etc.). |
+| **`sqlitePath`** | File path exists on disk when using a local path (non-local URIs are skipped with a note). |
+| **`dbPath` (Zvec root)** | Directory reachable; after opening the collection, the path is re-checked (directories may be created on first use). |
+| **Memory corpus roots** | Which of `MEMORY.md`, `USER.md`, `IDENTITY.md`, `memory/` are present (absence is OK if you only use tool-stored memories). |
+| **Zvec collection** | `count()` succeeds (engine + on-disk schema load). |
+| **SQLite / FTS** | Chunk/file stats from the open store. |
+| **Embeddings** | One real request via `probeEmbeddingAvailability()` (validates provider/network/model). |
+
+**Where to read the report:** the synchronous `status()` return value includes **`custom.memoryZvecStatusSelfTest`**, a JSON-serializable object with `overallOk`, `checkedAtMs`, per-path probes, `embedding`, `sqlite`, `zvecCollection`, `notes[]`, and `embeddingEndpointSummary` (provider/model/host only — no secrets).
+
+**Top-level hints:** after a self-test, `vector.available` / `fts.available` and `vector.loadError` on `MemoryProviderStatus` reflect combined health (embeddings + Zvec; FTS from SQLite).
+
+**Reliability:** `getMemorySearchManager` does **not** throw on failure; it returns `{ manager: null, error: "…" }` so the gateway status RPC does not crash if paths or native code misbehave.
 
 ## Diagnostics & logging
 

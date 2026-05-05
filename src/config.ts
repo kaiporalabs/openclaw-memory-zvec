@@ -36,7 +36,8 @@ function resolveDefaultDbPath(): string {
 
 const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
-function resolveDefaultSqlitePath(agentId: string): string {
+/** Default SQLite path for chunk metadata + FTS (`~/.openclaw/memory/<agentId>.sqlite`). */
+export function resolveDefaultSqlitePath(agentId: string): string {
   return join(homedir(), ".openclaw", "memory", `${agentId}.sqlite`);
 }
 

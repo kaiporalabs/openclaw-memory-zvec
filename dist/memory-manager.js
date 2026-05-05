@@ -5,10 +5,11 @@
  *
  * Diagnostics env vars for extra debug lines live in `debug-env.ts` / README “Diagnostics & logging”.
  */
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { formatErrorDiagnostic } from "./error-diagnostic.js";
+import { fileURLToPath } from "node:url";
+import { describeEmbeddingEndpoint, formatErrorDiagnostic } from "./error-diagnostic.js";
+import { computeStatusOverallOk, probeFilesystemPath, } from "./status-self-test.js";
 import { normalizeRecallQuery } from "./prompt-helpers.js";
 import { MemoryZvecStore } from "./zvec-store.js";
 import { computeChunkId, deleteChunksForFile, fileState, getChunkById, initMemorySchema, openMemorySqlite, searchFts, stats as sqliteStats, upsertChunk, upsertFileState, } from "./sqlite-store.js";
@@ -95,6 +96,28 @@ function chunkTextByLines(params) {
     flush(lines.length);
     return chunks;
 }
+function isProbeableFilesystemPath(p) {
+    const t = p.trim();
+    if (!t) {
+        return false;
+    }
+    if (t.includes("://") && !t.startsWith("file:")) {
+        return false;
+    }
+    return true;
+}
+function toFilesystemAbsolutePath(p) {
+    const t = p.trim();
+    if (t.startsWith("file:")) {
+        try {
+            return fileURLToPath(new URL(t));
+        }
+        catch {
+            return t;
+        }
+    }
+    return t;
+}
 export class ZvecSqliteMemoryManager {
     cfg;
     workspaceDir;
@@ -105,6 +128,7 @@ export class ZvecSqliteMemoryManager {
     db;
     initialized = false;
     lastEmbedProbe = null;
+    statusSelfTest = null;
     constructor(cfg, workspaceDir, agentId, embeddings, zvec, pluginLog) {
         this.cfg = cfg;
         this.workspaceDir = workspaceDir;
@@ -123,6 +147,19 @@ export class ZvecSqliteMemoryManager {
     status() {
         this.ensureInitialized();
         const st = sqliteStats(this.db);
+        const selfTest = this.statusSelfTest;
+        const zvecOk = selfTest?.zvecCollection.ok ?? true;
+        const embedOk = selfTest?.embedding.ok ?? true;
+        const ftsOk = selfTest?.sqlite.ok ?? true;
+        let vectorLoadError;
+        if (selfTest) {
+            if (!selfTest.embedding.ok && selfTest.embedding.error) {
+                vectorLoadError = `embeddings: ${selfTest.embedding.error}`;
+            }
+            else if (!selfTest.zvecCollection.ok && selfTest.zvecCollection.error) {
+                vectorLoadError = `zvec: ${selfTest.zvecCollection.error}`;
+            }
+        }
         return {
             backend: "builtin",
             provider: this.cfg.embedding.provider,
@@ -133,15 +170,114 @@ export class ZvecSqliteMemoryManager {
             workspaceDir: this.workspaceDir,
             dbPath: this.cfg.sqlitePath,
             sources: ["memory"],
-            fts: { enabled: true, available: true },
+            fts: {
+                enabled: true,
+                available: ftsOk,
+                ...(selfTest?.sqlite.error ? { error: selfTest.sqlite.error } : {}),
+            },
             vector: {
                 enabled: true,
-                available: true,
+                available: selfTest ? zvecOk && embedOk : true,
+                ...(vectorLoadError ? { loadError: vectorLoadError } : {}),
                 dims: this.cfg.embedding.dimensions,
             },
             custom: {
                 zvecDataRoot: this.cfg.dbPath,
+                ...(selfTest ? { memoryZvecStatusSelfTest: selfTest } : {}),
+                ...(!selfTest ? { embeddingEndpointSummary: describeEmbeddingEndpoint(this.cfg.embedding) } : {}),
             },
+        };
+    }
+    /**
+     * Deep checks for `purpose: "status"` (Control UI / `doctor.memory.status`): paths on disk,
+     * SQLite/FTS stats, Zvec collection reachability, embedding provider ping. Results appear under
+     * `status().custom.memoryZvecStatusSelfTest`.
+     */
+    async runStatusSelfTest() {
+        const checkedAtMs = Date.now();
+        const notes = [];
+        const workspaceDir = await probeFilesystemPath(this.workspaceDir);
+        if (!workspaceDir.ok) {
+            notes.push("Workspace directory missing or unreadable; memory file index cannot run.");
+        }
+        const sp = this.cfg.sqlitePath ?? "";
+        let sqlitePath;
+        if (!sp.trim()) {
+            sqlitePath = { path: "", ok: false, kind: "missing", error: "sqlitePath is empty" };
+        }
+        else if (!isProbeableFilesystemPath(sp)) {
+            sqlitePath = { path: sp, ok: true, kind: "unknown" };
+            notes.push("SQLite path uses a non-local URI; filesystem probe skipped.");
+        }
+        else {
+            sqlitePath = await probeFilesystemPath(toFilesystemAbsolutePath(sp));
+            if (!sqlitePath.ok) {
+                notes.push("SQLite path not found on disk (unexpected after open).");
+            }
+        }
+        const dbp = this.cfg.dbPath ?? "";
+        let zvecDataRoot;
+        let zvecCollection = { ok: false };
+        if (!dbp.trim()) {
+            zvecDataRoot = { path: "", ok: false, kind: "missing", error: "dbPath is empty" };
+            zvecCollection = { ok: false, error: "dbPath is empty" };
+        }
+        else if (!isProbeableFilesystemPath(dbp)) {
+            zvecDataRoot = { path: dbp, ok: true, kind: "unknown" };
+            notes.push("Zvec data root uses a non-local URI; filesystem probe skipped.");
+            try {
+                const docCount = await this.zvec.count();
+                zvecCollection = { ok: true, docCount };
+            }
+            catch (err) {
+                zvecCollection = { ok: false, error: formatErrorDiagnostic(err) };
+            }
+        }
+        else {
+            zvecDataRoot = await probeFilesystemPath(toFilesystemAbsolutePath(dbp));
+            try {
+                const docCount = await this.zvec.count();
+                zvecCollection = { ok: true, docCount };
+                zvecDataRoot = await probeFilesystemPath(toFilesystemAbsolutePath(dbp));
+            }
+            catch (err) {
+                zvecCollection = { ok: false, error: formatErrorDiagnostic(err) };
+            }
+        }
+        const memoryCorpusRootsPresent = await listMemoryRoots(this.workspaceDir);
+        if (memoryCorpusRootsPresent.length === 0) {
+            notes.push("No MEMORY.md, USER.md, IDENTITY.md, or memory/ in the workspace yet (OK if you only use tool-stored memories).");
+        }
+        let sqliteStatsResult = { ok: false };
+        try {
+            this.ensureInitialized();
+            const s = sqliteStats(this.db);
+            sqliteStatsResult = { ok: true, files: s.files, chunks: s.chunks };
+        }
+        catch (err) {
+            sqliteStatsResult = { ok: false, error: formatErrorDiagnostic(err) };
+        }
+        const embedding = await this.probeEmbeddingAvailability();
+        const overallOk = computeStatusOverallOk({
+            workspaceDir,
+            sqlitePath,
+            zvecDataRoot,
+            zvecCollectionOk: zvecCollection.ok,
+            embeddingOk: embedding.ok,
+            sqliteStatsOk: sqliteStatsResult.ok,
+        });
+        this.statusSelfTest = {
+            checkedAtMs,
+            overallOk,
+            embeddingEndpointSummary: describeEmbeddingEndpoint(this.cfg.embedding),
+            workspaceDir,
+            sqlitePath,
+            zvecDataRoot,
+            memoryCorpusRootsPresent,
+            zvecCollection,
+            embedding,
+            sqlite: sqliteStatsResult,
+            notes,
         };
     }
     async probeVectorAvailability() {

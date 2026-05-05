@@ -20,6 +20,7 @@ import type {
 import { createEmbeddings } from "./embeddings.js";
 import {
   memoryConfigSchema,
+  resolveDefaultSqlitePath,
   vectorDimsForModel,
   type MemoryCategory,
   type MemoryConfig,
@@ -160,29 +161,64 @@ export default definePluginEntry({
     api.logger.info(`memory-zvec: registered (data: ${resolvedDataRoot}, dim=${vectorDim}, lazy Zvec init)`);
 
     // Register full memory capability so OpenClaw status/CLI/tools can resolve the active memory runtime.
+    // getMemorySearchManager must not throw: gateway `doctor.memory.status` has no outer catch.
     const memoryRuntime: MemoryPluginRuntime = {
       async getMemorySearchManager(params) {
-        const agentId = params.agentId ?? "main";
-        const baseCfg = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-        const effectiveCfg = resolveCurrentHookConfig(agentId);
-        const resolvedSqlitePath = effectiveCfg.sqlitePath!.includes("://")
-          ? effectiveCfg.sqlitePath!
-          : api.resolvePath(effectiveCfg.sqlitePath!);
-        const resolvedZvecRoot = effectiveCfg.dbPath!.includes("://")
-          ? effectiveCfg.dbPath!
-          : api.resolvePath(effectiveCfg.dbPath!);
-        const manager = new ZvecSqliteMemoryManager(
-          { ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot },
-          api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId),
-          agentId,
-          createEmbeddings(api, effectiveCfg),
-          new MemoryZvecStore(resolvedZvecRoot, vectorDim),
-          api.logger,
-        );
-        if (params.purpose !== "status") {
-          await manager.sync({ reason: "open", force: false }).catch(() => undefined);
+        try {
+          const agentId = params.agentId ?? "main";
+          const baseCfg = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+          const effectiveCfg = resolveCurrentHookConfig(agentId);
+          const rawSqlite =
+            typeof effectiveCfg.sqlitePath === "string" && effectiveCfg.sqlitePath.trim().length > 0
+              ? effectiveCfg.sqlitePath
+              : resolveDefaultSqlitePath(agentId);
+          let resolvedSqlitePath = rawSqlite.includes("://") ? rawSqlite : api.resolvePath(rawSqlite);
+          if (typeof resolvedSqlitePath !== "string" || !resolvedSqlitePath.trim()) {
+            resolvedSqlitePath = api.resolvePath(resolveDefaultSqlitePath(agentId));
+          }
+          const rawDb =
+            typeof effectiveCfg.dbPath === "string" && effectiveCfg.dbPath.trim().length > 0
+              ? effectiveCfg.dbPath
+              : undefined;
+          if (!rawDb) {
+            return {
+              manager: null,
+              error: "memory-zvec: dbPath missing after config resolve",
+            };
+          }
+          let resolvedZvecRoot = rawDb.includes("://") ? rawDb : api.resolvePath(rawDb);
+          if (typeof resolvedZvecRoot !== "string" || !resolvedZvecRoot.trim()) {
+            return {
+              manager: null,
+              error: "memory-zvec: dbPath resolved to empty path",
+            };
+          }
+          const manager = new ZvecSqliteMemoryManager(
+            { ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot },
+            api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId),
+            agentId,
+            createEmbeddings(api, effectiveCfg),
+            new MemoryZvecStore(resolvedZvecRoot, vectorDim),
+            api.logger,
+          );
+          if (params.purpose === "status") {
+            await manager.runStatusSelfTest().catch((probeErr) => {
+              api.logger.warn(
+                `memory-zvec: runStatusSelfTest failed: ${formatErrorDiagnostic(probeErr)}`,
+              );
+            });
+          } else {
+            await manager.sync({ reason: "open", force: false }).catch(() => undefined);
+          }
+          return { manager };
+        } catch (err) {
+          const diagnostic = formatErrorDiagnostic(err);
+          api.logger.warn(`memory-zvec: getMemorySearchManager failed: ${diagnostic}`);
+          return {
+            manager: null,
+            error: `memory-zvec: ${diagnostic}`,
+          };
         }
-        return { manager };
       },
       resolveMemoryBackendConfig() {
         return { backend: "builtin" };

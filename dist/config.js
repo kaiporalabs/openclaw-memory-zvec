@@ -9,7 +9,8 @@ function resolveDefaultDbPath() {
     return join(homedir(), ".openclaw", "memory", "zvec");
 }
 const DEFAULT_DB_PATH = resolveDefaultDbPath();
-function resolveDefaultSqlitePath(agentId) {
+/** Default SQLite path for chunk metadata + FTS (`~/.openclaw/memory/<agentId>.sqlite`). */
+export function resolveDefaultSqlitePath(agentId) {
     return join(homedir(), ".openclaw", "memory", `${agentId}.sqlite`);
 }
 /** Known OpenAI + common Ollama embedding models (always set `dimensions` if yours is missing). */
