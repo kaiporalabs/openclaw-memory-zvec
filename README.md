@@ -8,6 +8,7 @@ Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw)
 ## Features
 
 - **Tools:** `memory_recall`, `memory_store`, `memory_forget` (memory slot contract).
+- **OpenClaw slot parity:** provides `memory_search` + `memory_get`, and registers a full memory runtime capability so `openclaw status --all` and `openclaw memory ...` work when `plugins.slots.memory = "memory-zvec"`.
 - **Embeddings:** any OpenClaw [memory embedding provider](https://docs.openclaw.ai/) — **Ollama**, **OpenAI**, Copilot, etc. Defaults are tuned for **Ollama** (`nomic-embed-text`, 768-d).
 - **Storage:** local directory under `~/.openclaw/memory/zvec` by default (Zvec collection + `memory-ids.json` id list for listing).
 - **CLI:** `openclaw memory-zvec list|search|stats` (after the plugin is loaded).
@@ -169,6 +170,7 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | --- | --- |
 | `embedding` | Provider/model/baseUrl/apiKey/dimensions (see `openclaw.plugin.json` / manifest). |
 | `dbPath` | Data root (default `~/.openclaw/memory/zvec`). Holds the Zvec collection directory and `memory-ids.json`. |
+| `sqlitePath` | Optional explicit SQLite path for chunk metadata + FTS. Defaults to `~/.openclaw/memory/<agentId>.sqlite` to align with builtin store paths. |
 | `autoRecall` | Inject top memories before the model runs (default `true`). |
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
 | `captureMaxChars` / `recallMaxChars` | Length limits for capture and recall query text. |

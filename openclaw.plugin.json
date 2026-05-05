@@ -5,7 +5,7 @@
   },
   "kind": "memory",
   "contracts": {
-    "tools": ["memory_forget", "memory_recall", "memory_store"]
+    "tools": ["memory_forget", "memory_recall", "memory_store", "memory_search", "memory_get"]
   },
   "uiHints": {
     "embedding.apiKey": {
@@ -41,6 +41,12 @@
       "placeholder": "~/.openclaw/memory/zvec",
       "advanced": true,
       "help": "Directory for the Zvec collection and id index (local disk)"
+    },
+    "sqlitePath": {
+      "label": "SQLite Store Path",
+      "placeholder": "~/.openclaw/memory/main.sqlite",
+      "advanced": true,
+      "help": "Optional explicit SQLite store path for FTS/chunk metadata (defaults to ~/.openclaw/memory/<agentId>.sqlite)"
     },
     "autoCapture": {
       "label": "Auto-Capture",
@@ -84,6 +90,7 @@
         }
       },
       "dbPath": { "type": "string" },
+      "sqlitePath": { "type": "string" },
       "autoCapture": { "type": "boolean" },
       "autoRecall": { "type": "boolean" },
       "dreaming": { "type": "object" },

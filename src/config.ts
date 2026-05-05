@@ -12,6 +12,11 @@ export type MemoryConfig = {
   };
   dreaming?: Record<string, unknown>;
   dbPath?: string;
+  /**
+   * Optional explicit SQLite store path for FTS + chunk metadata.
+   * When omitted, defaults to `~/.openclaw/memory/<agentId>.sqlite` to match OpenClaw builtin.
+   */
+  sqlitePath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
   captureMaxChars?: number;
@@ -30,6 +35,10 @@ function resolveDefaultDbPath(): string {
 }
 
 const DEFAULT_DB_PATH = resolveDefaultDbPath();
+
+function resolveDefaultSqlitePath(agentId: string): string {
+  return join(homedir(), ".openclaw", "memory", `${agentId}.sqlite`);
+}
 
 /** Known OpenAI + common Ollama embedding models (always set `dimensions` if yours is missing). */
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
@@ -76,14 +85,23 @@ function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
 }
 
 export const memoryConfigSchema = {
-  parse(value: unknown): MemoryConfig {
+  parse(value: unknown, opts?: { agentId?: string }): MemoryConfig {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("memory config required");
     }
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dreaming", "dbPath", "autoCapture", "autoRecall", "captureMaxChars", "recallMaxChars"],
+      [
+        "embedding",
+        "dreaming",
+        "dbPath",
+        "sqlitePath",
+        "autoCapture",
+        "autoRecall",
+        "captureMaxChars",
+        "recallMaxChars",
+      ],
       "memory config",
     );
 
@@ -140,6 +158,10 @@ export const memoryConfigSchema = {
       },
       dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
+      sqlitePath:
+        typeof cfg.sqlitePath === "string"
+          ? cfg.sqlitePath
+          : resolveDefaultSqlitePath(opts?.agentId ?? "main"),
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,

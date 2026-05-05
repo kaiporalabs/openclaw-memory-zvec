@@ -8,6 +8,7 @@ import { createEmbeddings } from "./embeddings.js";
 import { memoryConfigSchema, vectorDimsForModel, MEMORY_CATEGORIES, } from "./config.js";
 import { DEFAULT_AUTO_RECALL_TIMEOUT_MS, extractLatestUserText, extractUserTextContent, formatRelevantMemoriesContext, messageFingerprint, normalizeRecallQuery, resolveAutoCaptureStartIndex, shouldCapture, detectCategory, } from "./runtime-helpers.js";
 import { MemoryZvecStore } from "./zvec-store.js";
+import { ZvecSqliteMemoryManager } from "./memory-manager.js";
 function asRecord(value) {
     return value && typeof value === "object" && !Array.isArray(value)
         ? value
@@ -55,7 +56,7 @@ export default definePluginEntry({
     register(api) {
         let cfg;
         try {
-            cfg = memoryConfigSchema.parse(api.pluginConfig);
+            cfg = memoryConfigSchema.parse(api.pluginConfig, { agentId: "main" });
         }
         catch (error) {
             api.registerService({
@@ -76,7 +77,7 @@ export default definePluginEntry({
         const db = new MemoryZvecStore(resolvedDataRoot, vectorDim);
         const embeddings = createEmbeddings(api, cfg);
         const autoCaptureCursors = new Map();
-        const resolveCurrentHookConfig = () => {
+        const resolveCurrentHookConfig = (agentId) => {
             const runtimePluginConfig = resolveLivePluginConfigObject(api.runtime.config?.current
                 ? () => api.runtime.config.current()
                 : undefined, "memory-zvec", api.pluginConfig);
@@ -96,14 +97,51 @@ export default definePluginEntry({
                 },
                 ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
                 dbPath: cfg.dbPath,
+                sqlitePath: cfg.sqlitePath,
                 autoCapture: cfg.autoCapture,
                 autoRecall: cfg.autoRecall,
                 captureMaxChars: cfg.captureMaxChars,
                 recallMaxChars: cfg.recallMaxChars,
                 ...asRecord(runtimePluginConfig),
-            });
+            }, { agentId });
         };
         api.logger.info(`memory-zvec: registered (data: ${resolvedDataRoot}, dim=${vectorDim}, lazy Zvec init)`);
+        // Register full memory capability so OpenClaw status/CLI/tools can resolve the active memory runtime.
+        const memoryRuntime = {
+            async getMemorySearchManager(params) {
+                const agentId = params.agentId ?? "main";
+                const baseCfg = (api.runtime.config?.current?.() ?? api.config);
+                const effectiveCfg = resolveCurrentHookConfig(agentId);
+                const resolvedSqlitePath = effectiveCfg.sqlitePath.includes("://")
+                    ? effectiveCfg.sqlitePath
+                    : api.resolvePath(effectiveCfg.sqlitePath);
+                const resolvedZvecRoot = effectiveCfg.dbPath.includes("://")
+                    ? effectiveCfg.dbPath
+                    : api.resolvePath(effectiveCfg.dbPath);
+                const manager = new ZvecSqliteMemoryManager({ ...effectiveCfg, sqlitePath: resolvedSqlitePath, dbPath: resolvedZvecRoot }, api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId), agentId, createEmbeddings(api, effectiveCfg), new MemoryZvecStore(resolvedZvecRoot, vectorDim));
+                if (params.purpose !== "status") {
+                    await manager.sync({ reason: "open", force: false }).catch(() => undefined);
+                }
+                return { manager };
+            },
+            resolveMemoryBackendConfig() {
+                return { backend: "builtin" };
+            },
+            async closeAllMemorySearchManagers() {
+                // Managers are ephemeral; nothing global to close.
+            },
+        };
+        const promptBuilder = () => {
+            return [
+                "Use memory_search to find relevant notes from MEMORY.md and memory/.",
+                "Use memory_get to open a specific result by path and line range.",
+            ];
+        };
+        api.registerMemoryCapability({
+            runtime: memoryRuntime,
+            promptBuilder,
+            flushPlanResolver: () => null,
+        });
         api.registerTool({
             name: "memory_recall",
             label: "Memory Recall",
@@ -114,7 +152,7 @@ export default definePluginEntry({
             }),
             async execute(_toolCallId, params) {
                 const { query, limit = 5 } = params;
-                const currentCfg = resolveCurrentHookConfig();
+                const currentCfg = resolveCurrentHookConfig("main");
                 const vector = await embeddings.embed(normalizeRecallQuery(query, currentCfg.recallMaxChars));
                 const results = await db.search(vector, limit, 0.1);
                 if (results.length === 0) {
@@ -203,7 +241,7 @@ export default definePluginEntry({
                     };
                 }
                 if (query) {
-                    const currentCfg = resolveCurrentHookConfig();
+                    const currentCfg = resolveCurrentHookConfig("main");
                     const vector = await embeddings.embed(normalizeRecallQuery(query, currentCfg.recallMaxChars));
                     const results = await db.search(vector, 5, 0.7);
                     if (results.length === 0) {
@@ -244,6 +282,72 @@ export default definePluginEntry({
                 };
             },
         }, { name: "memory_forget" });
+        // OpenClaw memory slot tools (parity with memory-core).
+        api.registerTool({
+            name: "memory_search",
+            label: "Memory Search",
+            description: "Search workspace memory files (MEMORY.md + memory/) using hybrid vector + keyword search.",
+            parameters: Type.Object({
+                query: Type.String({ description: "Search query" }),
+                maxResults: Type.Optional(Type.Number({ description: "Maximum results (default: 8)" })),
+                minScore: Type.Optional(Type.Number({ description: "Minimum score threshold (default: 0.2)" })),
+            }),
+            async execute(_toolCallId, params) {
+                const { query, maxResults, minScore } = params;
+                const { manager, error } = await memoryRuntime.getMemorySearchManager({
+                    cfg: (api.runtime.config?.current?.() ?? api.config),
+                    agentId: "main",
+                    purpose: "default",
+                });
+                if (!manager) {
+                    throw new Error(error ?? "memory manager unavailable");
+                }
+                const results = await manager.search(query, {
+                    ...(typeof maxResults === "number" ? { maxResults } : {}),
+                    ...(typeof minScore === "number" ? { minScore } : {}),
+                });
+                if (results.length === 0) {
+                    return { content: [{ type: "text", text: "No results." }], details: { count: 0 } };
+                }
+                const text = results
+                    .map((r, i) => `${i + 1}. ${r.path}:${r.startLine}-${r.endLine} (${(r.score * 100).toFixed(0)}%)\n${r.snippet}`)
+                    .join("\n\n");
+                return {
+                    content: [{ type: "text", text }],
+                    details: { count: results.length, results },
+                };
+            },
+        }, { name: "memory_search" });
+        api.registerTool({
+            name: "memory_get",
+            label: "Memory Get",
+            description: "Read a file segment from the workspace memory corpus.",
+            parameters: Type.Object({
+                relPath: Type.String({ description: "Workspace-relative path" }),
+                from: Type.Optional(Type.Number({ description: "1-indexed start line (default: 1)" })),
+                lines: Type.Optional(Type.Number({ description: "Line count (default: 200)" })),
+            }),
+            async execute(_toolCallId, params) {
+                const { relPath, from, lines } = params;
+                const { manager, error } = await memoryRuntime.getMemorySearchManager({
+                    cfg: (api.runtime.config?.current?.() ?? api.config),
+                    agentId: "main",
+                    purpose: "default",
+                });
+                if (!manager) {
+                    throw new Error(error ?? "memory manager unavailable");
+                }
+                const res = await manager.readFile({
+                    relPath,
+                    ...(typeof from === "number" ? { from } : {}),
+                    ...(typeof lines === "number" ? { lines } : {}),
+                });
+                return {
+                    content: [{ type: "text", text: res.text }],
+                    details: res,
+                };
+            },
+        }, { name: "memory_get" });
         api.registerCli(({ program }) => {
             const root = program.command("memory-zvec").description("Zvec memory plugin commands");
             root
@@ -281,8 +385,81 @@ export default definePluginEntry({
                 console.log(`Total memories: ${count}`);
             });
         }, { commands: ["memory-zvec"] });
+        // Provide a minimal `memory` CLI for parity with memory-core when this plugin owns the slot.
+        api.registerCli(({ program }) => {
+            const memory = program.command("memory").description("Search, inspect, and reindex memory");
+            memory
+                .command("status")
+                .description("Show memory status")
+                .action(async () => {
+                const { manager, error } = await memoryRuntime.getMemorySearchManager({
+                    cfg: (api.runtime.config?.current?.() ?? api.config),
+                    agentId: "main",
+                    purpose: "status",
+                });
+                if (!manager) {
+                    console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
+                    return;
+                }
+                console.log(JSON.stringify({ ok: true, status: manager.status() }, null, 2));
+            });
+            memory
+                .command("reindex")
+                .description("Force a full reindex of workspace memory files")
+                .action(async () => {
+                const { manager, error } = await memoryRuntime.getMemorySearchManager({
+                    cfg: (api.runtime.config?.current?.() ?? api.config),
+                    agentId: "main",
+                    purpose: "cli",
+                });
+                if (!manager) {
+                    throw new Error(error ?? "memory manager unavailable");
+                }
+                await manager.sync?.({ reason: "cli reindex", force: true });
+                console.log("ok");
+            });
+            memory
+                .command("search")
+                .description("Hybrid search")
+                .argument("<query>", "Query")
+                .option("--limit <n>", "Max results", "8")
+                .action(async (query, opts) => {
+                const { manager, error } = await memoryRuntime.getMemorySearchManager({
+                    cfg: (api.runtime.config?.current?.() ?? api.config),
+                    agentId: "main",
+                    purpose: "cli",
+                });
+                if (!manager) {
+                    throw new Error(error ?? "memory manager unavailable");
+                }
+                const results = await manager.search(query, { maxResults: Number(opts.limit) });
+                console.log(JSON.stringify(results, null, 2));
+            });
+            memory
+                .command("get")
+                .description("Read a file segment")
+                .argument("<relPath>", "Workspace-relative path")
+                .option("--from <n>", "1-indexed start line", "1")
+                .option("--lines <n>", "Line count", "200")
+                .action(async (relPath, opts) => {
+                const { manager, error } = await memoryRuntime.getMemorySearchManager({
+                    cfg: (api.runtime.config?.current?.() ?? api.config),
+                    agentId: "main",
+                    purpose: "cli",
+                });
+                if (!manager) {
+                    throw new Error(error ?? "memory manager unavailable");
+                }
+                const res = await manager.readFile({
+                    relPath,
+                    from: Number(opts.from),
+                    lines: Number(opts.lines),
+                });
+                console.log(res.text);
+            });
+        }, { commands: ["memory"] });
         api.on("before_prompt_build", async (event) => {
-            const currentCfg = resolveCurrentHookConfig();
+            const currentCfg = resolveCurrentHookConfig("main");
             if (!currentCfg.autoRecall) {
                 return undefined;
             }
@@ -320,7 +497,7 @@ export default definePluginEntry({
             return undefined;
         });
         api.on("agent_end", async (event, ctx) => {
-            const currentCfg = resolveCurrentHookConfig();
+            const currentCfg = resolveCurrentHookConfig("main");
             if (!currentCfg.autoCapture) {
                 return;
             }

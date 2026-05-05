@@ -1,0 +1,229 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync as SqliteDatabaseSync } from "node:sqlite";
+
+export type ChunkRow = {
+  id: string;
+  relPath: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+  updatedAtMs: number;
+};
+
+export type ChunkSnippetRow = Omit<ChunkRow, "text"> & { snippet: string };
+
+export type SqliteMemoryStats = {
+  files: number;
+  chunks: number;
+  dirty: boolean;
+};
+
+function nowMs() {
+  return Date.now();
+}
+
+function ensureDirForFile(filePath: string) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function sha1(input: string): string {
+  return createHash("sha1").update(input).digest("hex");
+}
+
+export function openMemorySqlite(params: {
+  sqlitePath: string;
+}): DatabaseSync {
+  ensureDirForFile(params.sqlitePath);
+  const db = new SqliteDatabaseSync(params.sqlitePath);
+  db.exec("PRAGMA journal_mode=WAL;");
+  db.exec("PRAGMA synchronous=NORMAL;");
+  db.exec("PRAGMA temp_store=MEMORY;");
+  db.exec("PRAGMA foreign_keys=ON;");
+  return db;
+}
+
+export function initMemorySchema(db: DatabaseSync) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_files (
+      rel_path TEXT PRIMARY KEY,
+      mtime_ms INTEGER NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_chunks (
+      id TEXT PRIMARY KEY,
+      rel_path TEXT NOT NULL,
+      start_line INTEGER NOT NULL,
+      end_line INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+  `);
+
+  // FTS5 index for keyword/hybrid search.
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
+      id UNINDEXED,
+      rel_path,
+      text,
+      content='',
+      tokenize='unicode61'
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS memory_chunks_by_path ON memory_chunks(rel_path, start_line);
+  `);
+}
+
+export function computeChunkId(params: {
+  relPath: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+}): string {
+  return sha1(
+    `${params.relPath}\n${params.startLine}:${params.endLine}\n${params.text.slice(0, 4096)}`,
+  );
+}
+
+export function upsertFileState(db: DatabaseSync, params: { relPath: string; mtimeMs: number; sizeBytes: number }) {
+  const t = nowMs();
+  db.prepare(
+    `
+    INSERT INTO memory_files (rel_path, mtime_ms, size_bytes, updated_at_ms)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(rel_path) DO UPDATE SET
+      mtime_ms=excluded.mtime_ms,
+      size_bytes=excluded.size_bytes,
+      updated_at_ms=excluded.updated_at_ms;
+    `,
+  ).run(params.relPath, params.mtimeMs, params.sizeBytes, t);
+}
+
+export function fileState(db: DatabaseSync, relPath: string): { mtimeMs: number; sizeBytes: number } | null {
+  const row = db
+    .prepare(`SELECT mtime_ms AS mtimeMs, size_bytes AS sizeBytes FROM memory_files WHERE rel_path = ?`)
+    .get(relPath) as { mtimeMs?: number | bigint; sizeBytes?: number | bigint } | undefined;
+  if (!row) return null;
+  const mtimeMs = typeof row.mtimeMs === "bigint" ? Number(row.mtimeMs) : (row.mtimeMs ?? 0);
+  const sizeBytes = typeof row.sizeBytes === "bigint" ? Number(row.sizeBytes) : (row.sizeBytes ?? 0);
+  return { mtimeMs, sizeBytes };
+}
+
+export function deleteChunksForFile(db: DatabaseSync, relPath: string) {
+  const ids = db
+    .prepare(`SELECT id FROM memory_chunks WHERE rel_path = ?`)
+    .all(relPath) as Array<{ id: string }>;
+  db.prepare(`DELETE FROM memory_chunks WHERE rel_path = ?`).run(relPath);
+  for (const row of ids) {
+    db.prepare(`DELETE FROM memory_chunks_fts WHERE id = ?`).run(row.id);
+  }
+}
+
+export function upsertChunk(db: DatabaseSync, chunk: ChunkRow) {
+  db.prepare(
+    `
+    INSERT INTO memory_chunks (id, rel_path, start_line, end_line, text, updated_at_ms)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      rel_path=excluded.rel_path,
+      start_line=excluded.start_line,
+      end_line=excluded.end_line,
+      text=excluded.text,
+      updated_at_ms=excluded.updated_at_ms;
+    `,
+  ).run(chunk.id, chunk.relPath, chunk.startLine, chunk.endLine, chunk.text, chunk.updatedAtMs);
+
+  // Keep the FTS content in sync.
+  db.prepare(
+    `
+    INSERT INTO memory_chunks_fts (id, rel_path, text)
+    VALUES (?, ?, ?);
+    `,
+  ).run(chunk.id, chunk.relPath, chunk.text);
+}
+
+export function getChunkById(db: DatabaseSync, id: string): ChunkRow | null {
+  const row = db
+    .prepare(
+      `SELECT id, rel_path as relPath, start_line as startLine, end_line as endLine, text, updated_at_ms as updatedAtMs
+       FROM memory_chunks
+       WHERE id = ?`,
+    )
+    .get(id) as
+    | {
+        id: string;
+        relPath: string;
+        startLine: number;
+        endLine: number;
+        text: string;
+        updatedAtMs: number | bigint;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    id: row.id,
+    relPath: row.relPath,
+    startLine: row.startLine,
+    endLine: row.endLine,
+    text: row.text,
+    updatedAtMs: typeof row.updatedAtMs === "bigint" ? Number(row.updatedAtMs) : row.updatedAtMs,
+  };
+}
+
+export function searchFts(db: DatabaseSync, params: { query: string; limit: number }): ChunkSnippetRow[] {
+  // `bm25()` lower is better; we convert to a pseudo score later.
+  const rows = db
+    .prepare(
+      `
+      SELECT c.id,
+             c.rel_path AS relPath,
+             c.start_line AS startLine,
+             c.end_line AS endLine,
+             snippet(memory_chunks_fts, 2, '[', ']', '…', 12) AS snippet,
+             bm25(memory_chunks_fts) AS bm25
+        FROM memory_chunks_fts
+        JOIN memory_chunks c ON c.id = memory_chunks_fts.id
+       WHERE memory_chunks_fts MATCH ?
+       ORDER BY bm25 ASC
+       LIMIT ?;
+      `,
+    )
+    .all(params.query, params.limit) as Array<{
+    id: string;
+    relPath: string;
+    startLine: number;
+    endLine: number;
+    snippet: string;
+    bm25: number;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    relPath: r.relPath,
+    startLine: r.startLine,
+    endLine: r.endLine,
+    snippet: r.snippet,
+    updatedAtMs: 0,
+  }));
+}
+
+export function stats(db: DatabaseSync): SqliteMemoryStats {
+  const fileRow = db.prepare(`SELECT COUNT(*) AS c FROM memory_files`).get() as
+    | { c?: number | bigint }
+    | undefined;
+  const chunkRow = db.prepare(`SELECT COUNT(*) AS c FROM memory_chunks`).get() as
+    | { c?: number | bigint }
+    | undefined;
+  const files = typeof fileRow?.c === "bigint" ? Number(fileRow.c) : Number(fileRow?.c ?? 0);
+  const chunks = typeof chunkRow?.c === "bigint" ? Number(chunkRow.c) : Number(chunkRow?.c ?? 0);
+  // Minimal dirty signal: always false; real `memory-core` tracks in-progress indexing.
+  return { files, chunks, dirty: false };
+}
+

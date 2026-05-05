@@ -9,6 +9,9 @@ function resolveDefaultDbPath() {
     return join(homedir(), ".openclaw", "memory", "zvec");
 }
 const DEFAULT_DB_PATH = resolveDefaultDbPath();
+function resolveDefaultSqlitePath(agentId) {
+    return join(homedir(), ".openclaw", "memory", `${agentId}.sqlite`);
+}
 /** Known OpenAI + common Ollama embedding models (always set `dimensions` if yours is missing). */
 const EMBEDDING_DIMENSIONS = {
     "text-embedding-3-small": 1536,
@@ -46,12 +49,21 @@ function resolveEmbeddingModel(embedding) {
     return typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
 }
 export const memoryConfigSchema = {
-    parse(value) {
+    parse(value, opts) {
         if (!value || typeof value !== "object" || Array.isArray(value)) {
             throw new Error("memory config required");
         }
         const cfg = value;
-        assertAllowedKeys(cfg, ["embedding", "dreaming", "dbPath", "autoCapture", "autoRecall", "captureMaxChars", "recallMaxChars"], "memory config");
+        assertAllowedKeys(cfg, [
+            "embedding",
+            "dreaming",
+            "dbPath",
+            "sqlitePath",
+            "autoCapture",
+            "autoRecall",
+            "captureMaxChars",
+            "recallMaxChars",
+        ], "memory config");
         const embedding = cfg.embedding;
         if (!embedding || typeof embedding !== "object" || Array.isArray(embedding)) {
             throw new Error("embedding config required");
@@ -94,6 +106,9 @@ export const memoryConfigSchema = {
             },
             dreaming,
             dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
+            sqlitePath: typeof cfg.sqlitePath === "string"
+                ? cfg.sqlitePath
+                : resolveDefaultSqlitePath(opts?.agentId ?? "main"),
             autoCapture: cfg.autoCapture === true,
             autoRecall: cfg.autoRecall !== false,
             captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,

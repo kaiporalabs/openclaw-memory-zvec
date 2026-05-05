@@ -8,6 +8,11 @@ export type MemoryConfig = {
     };
     dreaming?: Record<string, unknown>;
     dbPath?: string;
+    /**
+     * Optional explicit SQLite store path for FTS + chunk metadata.
+     * When omitted, defaults to `~/.openclaw/memory/<agentId>.sqlite` to match OpenClaw builtin.
+     */
+    sqlitePath?: string;
     autoCapture?: boolean;
     autoRecall?: boolean;
     captureMaxChars?: number;
@@ -19,6 +24,8 @@ export declare const DEFAULT_CAPTURE_MAX_CHARS = 500;
 export declare const DEFAULT_RECALL_MAX_CHARS = 1000;
 export declare function vectorDimsForModel(model: string): number;
 export declare const memoryConfigSchema: {
-    parse(value: unknown): MemoryConfig;
+    parse(value: unknown, opts?: {
+        agentId?: string;
+    }): MemoryConfig;
 };
 //# sourceMappingURL=config.d.ts.map
