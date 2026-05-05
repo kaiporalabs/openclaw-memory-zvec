@@ -18,6 +18,25 @@ Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw)
 - **OpenClaw** ≥ `2026.5.0` (peer dependency; install globally or use the project CLI you already run).
 - **Zvec native builds** (from `@zvec/zvec`): **Linux** x64/ARM64, **macOS ARM64**, **Windows** x64. **macOS Intel (x64) is not supported** by upstream Zvec binaries — use ARM Mac, Linux, or Windows x64.
 
+## OpenClaw `status` (overview vs full)
+
+The default **`openclaw status`** command uses a **fast scan**: it does **not** open the memory subsystem or run plugin compatibility checks. That is expected OpenClaw behavior, not a bug in this plugin.
+
+You will typically see:
+
+| Overview line | Meaning |
+| --- | --- |
+| **Memory** · `enabled (plugin memory-zvec) · not checked` | Memory plugins are on and the slot is `memory-zvec`, but this run **did not probe** the store (fast mode). |
+| **Plugin compatibility** · `none` | No compatibility notices were collected in this fast scan (empty list). |
+
+To **inspect** memory stats (files/chunks/vector hints when the host resolves them) and populate **plugin compatibility** notices, run:
+
+```bash
+openclaw status --all
+```
+
+Use **`openclaw memory-zvec stats`** (or `list` / `search`) for plugin-local Zvec metrics regardless of `status` mode.
+
 ## Install
 
 ### From npm (recommended)
