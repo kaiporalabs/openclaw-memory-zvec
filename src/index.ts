@@ -181,6 +181,11 @@ export default definePluginEntry({
 
   register(api: OpenClawPluginApi) {
     let cfg: MemoryConfig;
+    const registrationPluginConfig = api.pluginConfig as Record<string, unknown>;
+    const userSetSqlitePathAtRegistration =
+      typeof registrationPluginConfig.sqlitePath === "string" &&
+      registrationPluginConfig.sqlitePath.trim().length > 0;
+
     try {
       cfg = memoryConfigSchema.parse(api.pluginConfig, { agentId: "main" });
     } catch (error) {
@@ -231,7 +236,10 @@ export default definePluginEntry({
           },
           ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
           dbPath: cfg.dbPath,
-          sqlitePath: cfg.sqlitePath,
+          // Do not inject schema-default sqlitePath from registration (main.sqlite) for every
+          // agent; omit so re-parse uses resolveDefaultSqlitePath(agentId). Only pass through when
+          // the user set sqlitePath in plugin config, or when live config sets it (spread below).
+          ...(userSetSqlitePathAtRegistration ? { sqlitePath: cfg.sqlitePath } : {}),
           autoCapture: cfg.autoCapture,
           autoRecall: cfg.autoRecall,
           captureMaxChars: cfg.captureMaxChars,
