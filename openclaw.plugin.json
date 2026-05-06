@@ -3,6 +3,18 @@
   "activation": {
     "onStartup": false
   },
+  "commandAliases": [
+    {
+      "name": "memory-zvec-cli-root",
+      "kind": "runtime-slash",
+      "cliCommand": "memory-zvec"
+    },
+    {
+      "name": "memory-cli-fallback",
+      "kind": "runtime-slash",
+      "cliCommand": "memory"
+    }
+  ],
   "kind": "memory",
   "contracts": {
     "tools": ["memory_forget", "memory_recall", "memory_store", "memory_search", "memory_get"]

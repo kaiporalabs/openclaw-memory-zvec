@@ -20,6 +20,7 @@ import { DEFAULT_AUTO_RECALL_TIMEOUT_MS, extractLatestUserText, extractUserTextC
 import { MemoryZvecStore } from "./zvec-store.js";
 import { ZvecSqliteMemoryManager } from "./memory-manager.js";
 import { describeEmbeddingEndpoint, formatErrorDiagnostic } from "./error-diagnostic.js";
+import { formatMemoryStatusCliOutput } from "./format-memory-status-cli.js";
 import { isMemoryZvecDebug } from "./debug-env.js";
 function asRecord(value) {
     return value && typeof value === "object" && !Array.isArray(value)
@@ -465,6 +466,31 @@ export default definePluginEntry({
                 };
             },
         }, { name: "memory_get" });
+        const printCliMemoryStatus = async (agentId, json) => {
+            const { manager, error } = await memoryRuntime.getMemorySearchManager({
+                cfg: (api.runtime.config?.current?.() ?? api.config),
+                agentId,
+                purpose: "status",
+            });
+            if (!manager) {
+                console.log(formatMemoryStatusCliOutput({
+                    ok: false,
+                    error: error ?? "memory manager unavailable",
+                    json,
+                }).trimEnd());
+                return;
+            }
+            try {
+                console.log(formatMemoryStatusCliOutput({
+                    ok: true,
+                    status: manager.status(),
+                    json,
+                }).trimEnd());
+            }
+            finally {
+                await manager.close?.().catch(() => undefined);
+            }
+        };
         api.registerCli(({ program }) => {
             const root = program.command("memory-zvec").description("Zvec memory plugin commands");
             root
@@ -541,23 +567,10 @@ export default definePluginEntry({
                 .command("verify")
                 .description("Alias for `memory-zvec status` — full paths + embedding/Zvec self-test")
                 .option("--agent <id>", "Agent id", "main")
+                .option("--json", "Print machine-readable JSON (default is human-readable tables)", false)
                 .action(async (opts) => {
                 const agentId = typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
-                const { manager, error } = await memoryRuntime.getMemorySearchManager({
-                    cfg: (api.runtime.config?.current?.() ?? api.config),
-                    agentId,
-                    purpose: "status",
-                });
-                if (!manager) {
-                    console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
-                    return;
-                }
-                try {
-                    console.log(JSON.stringify({ ok: true, status: manager.status() }, null, 2));
-                }
-                finally {
-                    await manager.close?.().catch(() => undefined);
-                }
+                await printCliMemoryStatus(agentId, Boolean(opts.json));
             });
             root
                 .command("export")
@@ -671,25 +684,12 @@ export default definePluginEntry({
             });
             root
                 .command("status")
-                .description("Print memory manager status as JSON (paths, SQLite, Zvec, embedding self-test). Use this if `openclaw memory status` is served by another plugin.")
+                .description("Memory manager status (paths, SQLite, Zvec, embedding self-test). Text tables by default; use --json for scripts.")
                 .option("--agent <id>", "Agent id", "main")
+                .option("--json", "Print machine-readable JSON", false)
                 .action(async (opts) => {
                 const agentId = typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
-                const { manager, error } = await memoryRuntime.getMemorySearchManager({
-                    cfg: (api.runtime.config?.current?.() ?? api.config),
-                    agentId,
-                    purpose: "status",
-                });
-                if (!manager) {
-                    console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
-                    return;
-                }
-                try {
-                    console.log(JSON.stringify({ ok: true, status: manager.status() }, null, 2));
-                }
-                finally {
-                    await manager.close?.().catch(() => undefined);
-                }
+                await printCliMemoryStatus(agentId, Boolean(opts.json));
             });
         }, { commands: ["memory-zvec"] });
         // Provide a minimal `memory` CLI for parity with memory-core when this plugin owns the slot.
@@ -697,23 +697,12 @@ export default definePluginEntry({
             const memory = program.command("memory").description("Search, inspect, and reindex memory");
             memory
                 .command("status")
-                .description("Show memory status (may be skipped if another plugin registered `memory` first)")
-                .action(async () => {
-                const { manager, error } = await memoryRuntime.getMemorySearchManager({
-                    cfg: (api.runtime.config?.current?.() ?? api.config),
-                    agentId: "main",
-                    purpose: "status",
-                });
-                if (!manager) {
-                    console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
-                    return;
-                }
-                try {
-                    console.log(JSON.stringify({ ok: true, status: manager.status() }, null, 2));
-                }
-                finally {
-                    await manager.close?.().catch(() => undefined);
-                }
+                .description("Show memory status (may be skipped if another plugin registered `memory` first). Tables by default; use --json for scripts.")
+                .option("--agent <id>", "Agent id", "main")
+                .option("--json", "Print machine-readable JSON", false)
+                .action(async (opts) => {
+                const agentId = typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+                await printCliMemoryStatus(agentId, Boolean(opts.json));
             });
             memory
                 .command("reindex")
