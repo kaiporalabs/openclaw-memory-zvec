@@ -643,6 +643,44 @@ export default definePluginEntry({
           });
 
         root
+          .command("index")
+          .description(
+            "Reindex workspace memory files (MEMORY.md, USER.md, IDENTITY.md, memory/) into SQLite + Zvec",
+          )
+          .option("--agent <id>", "Agent id", "main")
+          .option("--force", "Force full reindex (re-embed all chunks)", false)
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const { manager, error } = await memoryRuntime.getMemorySearchManager({
+              cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
+              agentId,
+              purpose: "cli",
+            });
+            if (!manager) {
+              console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            const syncFn = manager.sync?.bind(manager);
+            if (!syncFn) {
+              console.log(JSON.stringify({ ok: false, error: "memory manager has no sync()" }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            try {
+              await syncFn({ reason: "cli", force: Boolean(opts.force) });
+              console.log(JSON.stringify({ ok: true, reindexed: true, force: Boolean(opts.force) }, null, 2));
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+              process.exitCode = 1;
+            } finally {
+              await manager.close?.().catch(() => undefined);
+            }
+          });
+
+        root
           .command("status")
           .description(
             "Print memory manager status as JSON (paths, SQLite, Zvec, embedding self-test). Use this if `openclaw memory status` is served by another plugin.",
