@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ZVecCollection, ZVecCollectionSchema, ZVecCreateAndOpen, ZVecDataType, ZVecIndexType, ZVecInitialize, ZVecLogLevel, ZVecMetricType, ZVecOpen, } from "@zvec/zvec";
+import { validateWritableDirectory } from "./path-validation.js";
 let zvecGlobalInit = false;
 function ensureZvecInit() {
     if (zvecGlobalInit) {
@@ -91,6 +92,10 @@ export class MemoryZvecStore {
     async doInitialize() {
         ensureZvecInit();
         fs.mkdirSync(this.dataRoot, { recursive: true });
+        const probe = validateWritableDirectory(this.dataRoot);
+        if (!probe.ok) {
+            throw new Error(`Zvec data root not usable: ${probe.error}` + (probe.hint ? ` (${probe.hint})` : ""));
+        }
         const schema = buildSchema(this.vectorDim);
         let coll;
         try {

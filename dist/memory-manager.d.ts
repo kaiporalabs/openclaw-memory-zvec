@@ -4,6 +4,7 @@ import { type PathProbeResult } from "./status-self-test.js";
 import type { Embeddings } from "./embeddings.js";
 import type { MemoryConfig } from "./config.js";
 import { MemoryZvecStore } from "./zvec-store.js";
+import type { ChunkRow } from "./sqlite-store.js";
 export type MemoryZvecStatusSelfTest = {
     checkedAtMs: number;
     overallOk: boolean;
@@ -63,6 +64,23 @@ export declare class ZvecSqliteMemoryManager implements MemorySearchManager {
         onDebug?: (debug: MemorySearchRuntimeDebug) => void;
         sources?: MemorySource[];
     }): Promise<MemorySearchResult[]>;
+    /** Export chunks + metadata for backup / migration */
+    exportChunksSnapshot(): {
+        formatVersion: 1;
+        exportedAt: string;
+        agentId: string;
+        chunks: ChunkRow[];
+    };
+    /** Re-embed every SQLite chunk into Zvec (expensive). */
+    reembedAll(params?: {
+        batchPauseMs?: number;
+    }): Promise<{
+        updated: number;
+    }>;
+    /** Apply snapshot produced by `exportChunksSnapshot` (upserts SQLite + Zvec). */
+    applyChunksSnapshot(chunks: ChunkRow[]): Promise<{
+        imported: number;
+    }>;
     readFile(params: {
         relPath: string;
         from?: number;

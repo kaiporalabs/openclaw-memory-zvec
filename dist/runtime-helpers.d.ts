@@ -1,6 +1,6 @@
 import { detectCategory, formatRelevantMemoriesContext, normalizeRecallQuery, shouldCapture } from "./prompt-helpers.js";
 export { detectCategory, formatRelevantMemoriesContext, normalizeRecallQuery, shouldCapture, };
-export declare const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15000;
+export { DEFAULT_AUTO_RECALL_TIMEOUT_MS } from "./config.js";
 export type AutoCaptureCursor = {
     nextIndex: number;
     lastMessageFingerprint?: string;

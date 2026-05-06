@@ -14,6 +14,7 @@ import {
   ZVecOpen,
 } from "@zvec/zvec";
 import type { MemoryCategory } from "./config.js";
+import { validateWritableDirectory } from "./path-validation.js";
 
 let zvecGlobalInit = false;
 
@@ -129,6 +130,12 @@ export class MemoryZvecStore {
   private async doInitialize(): Promise<void> {
     ensureZvecInit();
     fs.mkdirSync(this.dataRoot, { recursive: true });
+    const probe = validateWritableDirectory(this.dataRoot);
+    if (!probe.ok) {
+      throw new Error(
+        `Zvec data root not usable: ${probe.error}` + (probe.hint ? ` (${probe.hint})` : ""),
+      );
+    }
 
     const schema = buildSchema(this.vectorDim);
     let coll: ZVecCollection;

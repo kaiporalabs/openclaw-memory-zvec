@@ -11,7 +11,8 @@ Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw)
 - **OpenClaw slot parity:** provides `memory_search` + `memory_get`, and registers a full memory runtime capability so `openclaw status --all` and `openclaw memory ...` work when `plugins.slots.memory = "memory-zvec"`.
 - **Embeddings:** any OpenClaw [memory embedding provider](https://docs.openclaw.ai/) — **Ollama**, **OpenAI**, Copilot, etc. Defaults are tuned for **Ollama** (`nomic-embed-text`, 768-d).
 - **Storage:** local directory under `~/.openclaw/memory/zvec` by default (Zvec collection + `memory-ids.json` id list for listing).
-- **CLI:** `openclaw memory-zvec list|search|stats|status` (always under `memory-zvec`; see README for `memory` vs `memory-zvec`).
+- **CLI:** `openclaw memory-zvec list|search|stats|status|index|verify|export|import|reembed` (always under `memory-zvec`; see README for `memory` vs `memory-zvec`).
+- **Retrieval:** configurable **hybrid** fusion (vector + SQLite FTS/BM25), optional **cross-encoder rerank** (Jina-compatible `/rerank`), **MMR** diversity, **adaptive recall** (skip trivial prompts), optional **time decay**, **scope** isolation (`global` + `agent:<id>` by default).
 - **Status self-test:** when OpenClaw opens the memory runtime with **`purpose: "status"`** (e.g. Control UI / `doctor.memory.status`), the plugin runs path checks, SQLite/FTS stats, Zvec `count()`, and a real **embedding provider ping**; results are exposed on the manager’s `status()` payload (see below).
 
 ## Requirements
@@ -58,6 +59,40 @@ When the host resolves the active memory plugin for **status** (not for a normal
 **Top-level hints:** after a self-test, `vector.available` / `fts.available` and `vector.loadError` on `MemoryProviderStatus` reflect combined health (embeddings + Zvec; FTS from SQLite).
 
 **Reliability:** `getMemorySearchManager` does **not** throw on failure; it returns `{ manager: null, error: "…" }` so the gateway status RPC does not crash if paths or native code misbehave.
+
+## Retrieval, rerank, scopes (v1.2+)
+
+Workspace chunks (`MEMORY.md`, `memory/`, …) are indexed with a **`scope`** column (default **`global`**). Search filters results to **`global`** plus **`agent:<agentId>`** unless you override `scopes.agentAccess`.
+
+Hybrid scoring merges **vector ANN** with **SQLite FTS BM25** (`retrieval.mode`, weights, `minScore` / `hardMinScore`). Optional **`rerank`** calls a **Jina-style** `POST` endpoint (`{ model, query, documents:[{text}] }`). **`adaptive`** skips auto-recall / hybrid search on very short “hello/thanks” prompts unless force-keywords match. **`decay`** optionally down-weights older chunks.
+
+Example fragment:
+
+```json
+{
+  "retrieval": {
+    "mode": "hybrid",
+    "vectorWeight": 0.65,
+    "ftsWeight": 0.35,
+    "minScore": 0.2,
+    "hardMinScore": 0.08,
+    "mmrEnabled": true,
+    "mmrLambda": 0.65,
+    "mmrPoolSize": 36
+  },
+  "rerank": {
+    "enabled": false,
+    "endpoint": "https://api.jina.ai/v1/rerank",
+    "model": "jina-reranker-v2-base-multilingual",
+    "candidatePoolSize": 16,
+    "timeoutMs": 8000,
+    "rerankBlendWeight": 0.45
+  },
+  "autoRecallTimeoutMs": 15000
+}
+```
+
+**`smartExtraction`** is parsed for forward compatibility; LLM-based extraction is not enabled in this release.
 
 ## Diagnostics & logging
 

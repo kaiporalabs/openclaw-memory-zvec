@@ -12,7 +12,7 @@ export {
   shouldCapture,
 };
 
-export const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
+export { DEFAULT_AUTO_RECALL_TIMEOUT_MS } from "./config.js";
 
 export type AutoCaptureCursor = {
   nextIndex: number;

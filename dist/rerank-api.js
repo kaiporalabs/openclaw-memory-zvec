@@ -1,0 +1,39 @@
+export async function rerankWithJinaCompatible(params) {
+    const body = {
+        model: params.model,
+        query: params.query,
+        documents: params.documents.map((text) => ({ text })),
+    };
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), params.timeoutMs);
+    try {
+        const headers = {
+            "Content-Type": "application/json",
+        };
+        if (params.apiKey?.trim()) {
+            headers.Authorization = `Bearer ${params.apiKey.trim()}`;
+        }
+        const res = await fetch(params.endpoint.trim(), {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: ctrl.signal,
+        });
+        if (!res.ok) {
+            const errTxt = await res.text().catch(() => "");
+            throw new Error(`rerank HTTP ${res.status}${errTxt ? `: ${errTxt.slice(0, 200)}` : ""}`);
+        }
+        const json = (await res.json());
+        const rows = json.results ?? json.data ?? [];
+        return rows
+            .filter((r) => typeof r.index === "number")
+            .map((r) => ({
+            index: r.index,
+            score: typeof r.relevance_score === "number" ? r.relevance_score : Number(r.score ?? 0),
+        }));
+    }
+    finally {
+        clearTimeout(t);
+    }
+}
+//# sourceMappingURL=rerank-api.js.map

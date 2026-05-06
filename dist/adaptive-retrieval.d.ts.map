@@ -1,0 +1,1 @@
+{"version":3,"file":"adaptive-retrieval.d.ts","sourceRoot":"","sources":["../src/adaptive-retrieval.ts"],"names":[],"mappings":"AAAA,+GAA+G;AAO/G,MAAM,MAAM,sBAAsB,GAAG;IACnC,KAAK,EAAE,MAAM,CAAC;IACd,6CAA6C;IAC7C,OAAO,EAAE,OAAO,CAAC;IACjB,sCAAsC;IACtC,UAAU,EAAE,MAAM,CAAC;IACnB,2CAA2C;IAC3C,WAAW,EAAE,MAAM,CAAC;CACrB,CAAC;AAmBF,wBAAgB,wBAAwB,CAAC,MAAM,EAAE,sBAAsB,GAAG,OAAO,CAchF"}

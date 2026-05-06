@@ -1,6 +1,6 @@
 import { detectCategory, formatRelevantMemoriesContext, normalizeRecallQuery, shouldCapture, } from "./prompt-helpers.js";
 export { detectCategory, formatRelevantMemoriesContext, normalizeRecallQuery, shouldCapture, };
-export const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
+export { DEFAULT_AUTO_RECALL_TIMEOUT_MS } from "./config.js";
 function asRecord(value) {
     return value && typeof value === "object" && !Array.isArray(value)
         ? value

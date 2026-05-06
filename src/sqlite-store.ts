@@ -11,6 +11,8 @@ export type ChunkRow = {
   endLine: number;
   text: string;
   updatedAtMs: number;
+  /** Access scope for isolation (default `global`) */
+  scope?: string;
 };
 
 export type ChunkSnippetRow = Omit<ChunkRow, "text"> & { snippet: string };
@@ -43,6 +45,14 @@ export function openMemorySqlite(params: {
   db.exec("PRAGMA temp_store=MEMORY;");
   db.exec("PRAGMA foreign_keys=ON;");
   return db;
+}
+
+export function migrateMemoryChunksSchema(db: DatabaseSync) {
+  try {
+    db.exec(`ALTER TABLE memory_chunks ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';`);
+  } catch {
+    // Column already exists
+  }
 }
 
 export function initMemorySchema(db: DatabaseSync) {
@@ -80,6 +90,8 @@ export function initMemorySchema(db: DatabaseSync) {
   db.exec(`
     CREATE INDEX IF NOT EXISTS memory_chunks_by_path ON memory_chunks(rel_path, start_line);
   `);
+
+  migrateMemoryChunksSchema(db);
 }
 
 export function computeChunkId(params: {
@@ -128,18 +140,20 @@ export function deleteChunksForFile(db: DatabaseSync, relPath: string) {
 }
 
 export function upsertChunk(db: DatabaseSync, chunk: ChunkRow) {
+  const scope = chunk.scope ?? "global";
   db.prepare(
     `
-    INSERT INTO memory_chunks (id, rel_path, start_line, end_line, text, updated_at_ms)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO memory_chunks (id, rel_path, start_line, end_line, text, updated_at_ms, scope)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       rel_path=excluded.rel_path,
       start_line=excluded.start_line,
       end_line=excluded.end_line,
       text=excluded.text,
-      updated_at_ms=excluded.updated_at_ms;
+      updated_at_ms=excluded.updated_at_ms,
+      scope=excluded.scope;
     `,
-  ).run(chunk.id, chunk.relPath, chunk.startLine, chunk.endLine, chunk.text, chunk.updatedAtMs);
+  ).run(chunk.id, chunk.relPath, chunk.startLine, chunk.endLine, chunk.text, chunk.updatedAtMs, scope);
 
   // Keep the FTS content in sync.
   db.prepare(
@@ -153,7 +167,8 @@ export function upsertChunk(db: DatabaseSync, chunk: ChunkRow) {
 export function getChunkById(db: DatabaseSync, id: string): ChunkRow | null {
   const row = db
     .prepare(
-      `SELECT id, rel_path as relPath, start_line as startLine, end_line as endLine, text, updated_at_ms as updatedAtMs
+      `SELECT id, rel_path as relPath, start_line as startLine, end_line as endLine, text, updated_at_ms as updatedAtMs,
+              scope as scope
        FROM memory_chunks
        WHERE id = ?`,
     )
@@ -165,6 +180,7 @@ export function getChunkById(db: DatabaseSync, id: string): ChunkRow | null {
         endLine: number;
         text: string;
         updatedAtMs: number | bigint;
+        scope?: string | null;
       }
     | undefined;
   if (!row) return null;
@@ -175,11 +191,20 @@ export function getChunkById(db: DatabaseSync, id: string): ChunkRow | null {
     endLine: row.endLine,
     text: row.text,
     updatedAtMs: typeof row.updatedAtMs === "bigint" ? Number(row.updatedAtMs) : row.updatedAtMs,
+    ...(row.scope ? { scope: row.scope } : { scope: "global" }),
   };
 }
 
-export function searchFts(db: DatabaseSync, params: { query: string; limit: number }): ChunkSnippetRow[] {
-  // `bm25()` lower is better; we convert to a pseudo score later.
+export type FtsHitRow = ChunkSnippetRow & { bm25: number };
+
+export function searchFts(
+  db: DatabaseSync,
+  params: { query: string; limit: number; scopes?: string[] },
+): FtsHitRow[] {
+  const scopes = params.scopes?.filter((s) => s.length > 0) ?? [];
+  const scopeClause =
+    scopes.length > 0 ? `AND c.scope IN (${scopes.map(() => "?").join(", ")})` : "";
+  // `bm25()` lower is better; normalized later in retrieval pipeline.
   const rows = db
     .prepare(
       `
@@ -192,11 +217,12 @@ export function searchFts(db: DatabaseSync, params: { query: string; limit: numb
         FROM memory_chunks_fts
         JOIN memory_chunks c ON c.id = memory_chunks_fts.id
        WHERE memory_chunks_fts MATCH ?
+       ${scopeClause}
        ORDER BY bm25 ASC
        LIMIT ?;
       `,
     )
-    .all(params.query, params.limit) as Array<{
+    .all(...(scopes.length > 0 ? [params.query, ...scopes, params.limit] : [params.query, params.limit])) as Array<{
     id: string;
     relPath: string;
     startLine: number;
@@ -211,6 +237,35 @@ export function searchFts(db: DatabaseSync, params: { query: string; limit: numb
     endLine: r.endLine,
     snippet: r.snippet,
     updatedAtMs: 0,
+    bm25: typeof r.bm25 === "bigint" ? Number(r.bm25) : r.bm25,
+  }));
+}
+
+/** Export all chunks for backup / import workflows */
+export function listAllChunks(db: DatabaseSync): ChunkRow[] {
+  const rows = db
+    .prepare(
+      `SELECT id, rel_path AS relPath, start_line AS startLine, end_line AS endLine,
+              text, updated_at_ms AS updatedAtMs, scope AS scope
+       FROM memory_chunks`,
+    )
+    .all() as Array<{
+    id: string;
+    relPath: string;
+    startLine: number;
+    endLine: number;
+    text: string;
+    updatedAtMs: number | bigint;
+    scope?: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    relPath: r.relPath,
+    startLine: r.startLine,
+    endLine: r.endLine,
+    text: r.text,
+    updatedAtMs: typeof r.updatedAtMs === "bigint" ? Number(r.updatedAtMs) : r.updatedAtMs,
+    scope: r.scope ?? "global",
   }));
 }
 

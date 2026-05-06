@@ -6,6 +6,8 @@ export type ChunkRow = {
     endLine: number;
     text: string;
     updatedAtMs: number;
+    /** Access scope for isolation (default `global`) */
+    scope?: string;
 };
 export type ChunkSnippetRow = Omit<ChunkRow, "text"> & {
     snippet: string;
@@ -18,6 +20,7 @@ export type SqliteMemoryStats = {
 export declare function openMemorySqlite(params: {
     sqlitePath: string;
 }): DatabaseSync;
+export declare function migrateMemoryChunksSchema(db: DatabaseSync): void;
 export declare function initMemorySchema(db: DatabaseSync): void;
 export declare function computeChunkId(params: {
     relPath: string;
@@ -37,9 +40,15 @@ export declare function fileState(db: DatabaseSync, relPath: string): {
 export declare function deleteChunksForFile(db: DatabaseSync, relPath: string): void;
 export declare function upsertChunk(db: DatabaseSync, chunk: ChunkRow): void;
 export declare function getChunkById(db: DatabaseSync, id: string): ChunkRow | null;
+export type FtsHitRow = ChunkSnippetRow & {
+    bm25: number;
+};
 export declare function searchFts(db: DatabaseSync, params: {
     query: string;
     limit: number;
-}): ChunkSnippetRow[];
+    scopes?: string[];
+}): FtsHitRow[];
+/** Export all chunks for backup / import workflows */
+export declare function listAllChunks(db: DatabaseSync): ChunkRow[];
 export declare function stats(db: DatabaseSync): SqliteMemoryStats;
 //# sourceMappingURL=sqlite-store.d.ts.map

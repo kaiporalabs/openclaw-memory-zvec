@@ -12,7 +12,11 @@ import { describeEmbeddingEndpoint, formatErrorDiagnostic } from "./error-diagno
 import { computeStatusOverallOk, probeFilesystemPath, } from "./status-self-test.js";
 import { normalizeRecallQuery } from "./prompt-helpers.js";
 import { MemoryZvecStore } from "./zvec-store.js";
-import { computeChunkId, deleteChunksForFile, fileState, getChunkById, initMemorySchema, openMemorySqlite, searchFts, stats as sqliteStats, upsertChunk, upsertFileState, } from "./sqlite-store.js";
+import { shouldSkipAdaptiveRecall } from "./adaptive-retrieval.js";
+import { applyTimeDecay, bm25BatchToScores, fuseHybridScores, maximalMarginalRelevance, } from "./retrieval-pipeline.js";
+import { rerankWithJinaCompatible } from "./rerank-api.js";
+import { isScopeAllowed, resolveAllowedScopes } from "./scopes.js";
+import { computeChunkId, deleteChunksForFile, fileState, getChunkById, initMemorySchema, listAllChunks, openMemorySqlite, searchFts, stats as sqliteStats, upsertChunk, upsertFileState, } from "./sqlite-store.js";
 function looksIndexableFile(relPath) {
     const lower = relPath.toLowerCase();
     if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".markdown"))
@@ -323,6 +327,7 @@ export class ZvecSqliteMemoryManager {
                 const raw = await fsp.readFile(absPath, "utf8");
                 const chunks = chunkTextByLines({ relPath, text: raw, maxChars: 1200 });
                 deleteChunksForFile(this.db, relPath);
+                const memScope = this.cfg.scopes.defaultMemoryScope;
                 for (const chunk of chunks) {
                     upsertChunk(this.db, {
                         id: chunk.id,
@@ -331,6 +336,7 @@ export class ZvecSqliteMemoryManager {
                         endLine: chunk.endLine,
                         text: chunk.text,
                         updatedAtMs: Date.now(),
+                        scope: memScope,
                     });
                     const vec = await this.embeddings.embed(chunk.text);
                     await this.zvec.store({
@@ -357,56 +363,219 @@ export class ZvecSqliteMemoryManager {
     async search(query, opts) {
         void opts?.qmdSearchModeOverride;
         this.ensureInitialized();
+        const rc = this.cfg.retrieval;
         const maxResults = Math.max(1, Math.floor(opts?.maxResults ?? 8));
-        const minScore = typeof opts?.minScore === "number" ? opts.minScore : 0.2;
-        // 1) Vector search candidates.
+        const minScore = typeof opts?.minScore === "number" ? opts.minScore : rc.minScore;
+        const hardMin = rc.hardMinScore;
+        if (shouldSkipAdaptiveRecall({
+            query,
+            enabled: this.cfg.adaptive.enabled,
+            minCharsEn: this.cfg.adaptive.minCharsEn,
+            minCharsCjk: this.cfg.adaptive.minCharsCjk,
+        })) {
+            return [];
+        }
+        const allowed = new Set(resolveAllowedScopes(this.cfg, this.agentId));
+        const poolLimit = Math.max(rc.mmrPoolSize, maxResults * 4, 24);
         let vectorResults = [];
         try {
             const qVec = await this.embeddings.embed(normalizeRecallQuery(query, this.cfg.recallMaxChars));
-            const z = await this.zvec.search(qVec, maxResults * 3, 0);
+            const z = await this.zvec.search(qVec, poolLimit, 0);
             vectorResults = z.map((r) => ({ id: r.entry.id, score: r.score }));
         }
         catch (err) {
             this.pluginLog?.warn(`memory-zvec: vector search leg failed (using FTS only) [agent=${this.agentId}]: ${formatErrorDiagnostic(err)}`);
         }
-        // 2) FTS candidates.
-        const fts = searchFts(this.db, { query, limit: maxResults * 3 });
-        // Merge by id.
-        const merged = new Map();
-        for (const v of vectorResults) {
-            merged.set(v.id, { ...(merged.get(v.id) ?? {}), vectorScore: v.score });
-        }
-        for (const r of fts) {
-            merged.set(r.id, {
-                ...(merged.get(r.id) ?? {}),
-                relPath: r.relPath,
-                startLine: r.startLine,
-                endLine: r.endLine,
-                snippet: r.snippet,
-                textScore: 0.35,
+        let ftsRows = [];
+        try {
+            ftsRows = searchFts(this.db, {
+                query,
+                limit: poolLimit,
+                scopes: [...allowed],
             });
         }
-        const scored = [];
-        for (const [id, info] of merged) {
+        catch (err) {
+            this.pluginLog?.warn(`memory-zvec: FTS query failed (vector-only for this search) [agent=${this.agentId}]: ${formatErrorDiagnostic(err)}`);
+        }
+        const ftsNorm = bm25BatchToScores(ftsRows.map((r) => ({ id: r.id, bm25: r.bm25 })));
+        const vectorById = new Map(vectorResults.map((v) => [v.id, v.score]));
+        const ftsById = ftsNorm;
+        const ids = new Set();
+        for (const v of vectorResults)
+            ids.add(v.id);
+        for (const r of ftsRows)
+            ids.add(r.id);
+        const fusedMap = fuseHybridScores({
+            ids,
+            vectorById,
+            ftsById,
+            vectorWeight: rc.vectorWeight,
+            ftsWeight: rc.ftsWeight,
+            mode: rc.mode,
+        });
+        const rows = [];
+        for (const id of fusedMap.keys()) {
             const chunk = getChunkById(this.db, id);
             if (!chunk)
                 continue;
-            const score = Math.max(info.vectorScore ?? 0, info.textScore ?? 0);
+            if (!isScopeAllowed(chunk.scope, allowed))
+                continue;
+            let fused = fusedMap.get(id) ?? 0;
+            if (this.cfg.decay.enabled) {
+                fused = applyTimeDecay({
+                    fusedScore: fused,
+                    updatedAtMs: chunk.updatedAtMs,
+                    halfLifeDays: this.cfg.decay.halfLifeDays,
+                    weight: this.cfg.decay.blendWeight,
+                });
+            }
+            if (fused < hardMin)
+                continue;
+            const ftsHit = ftsRows.find((x) => x.id === id);
+            rows.push({
+                id,
+                fused,
+                snippet: ftsHit?.snippet,
+                vectorScore: vectorById.get(id),
+                ftsScore: ftsById.get(id),
+            });
+        }
+        rows.sort((a, b) => b.fused - a.fused);
+        let ranked = rows.filter((r) => r.fused >= minScore);
+        const rr = this.cfg.rerank;
+        if (rr.enabled && rr.endpoint.trim().length > 0 && ranked.length > 1) {
+            const k = Math.min(rr.candidatePoolSize, ranked.length);
+            const slice = ranked.slice(0, k);
+            const docs = slice.map((r) => getChunkById(this.db, r.id)?.text ?? "");
+            try {
+                const order = await rerankWithJinaCompatible({
+                    endpoint: rr.endpoint,
+                    apiKey: rr.apiKey,
+                    model: rr.model,
+                    query,
+                    documents: docs,
+                    timeoutMs: rr.timeoutMs,
+                });
+                const maxS = Math.max(1e-6, ...order.map((o) => Math.abs(o.score)));
+                const rerankByIdx = new Map(order.map((o) => [o.index, Math.min(1, Math.abs(o.score) / maxS)]));
+                const blend = rr.rerankBlendWeight;
+                for (let i = 0; i < slice.length; i++) {
+                    const rs = rerankByIdx.get(i) ?? 0;
+                    slice[i].fused = (1 - blend) * slice[i].fused + blend * rs;
+                }
+                slice.sort((a, b) => b.fused - a.fused);
+                ranked = [...slice, ...ranked.slice(k)].sort((a, b) => b.fused - a.fused);
+            }
+            catch (err) {
+                this.pluginLog?.warn(`memory-zvec: rerank failed (using fusion only) [agent=${this.agentId}]: ${formatErrorDiagnostic(err)}`);
+            }
+        }
+        let orderedIds;
+        if (rc.mmrEnabled && ranked.length > 1) {
+            const mmrCandidates = ranked.map((r) => ({
+                id: r.id,
+                text: getChunkById(this.db, r.id)?.text ?? "",
+                score: r.fused,
+            }));
+            orderedIds = maximalMarginalRelevance({
+                candidates: mmrCandidates,
+                maxResults,
+                lambda: rc.mmrLambda,
+            });
+        }
+        else {
+            orderedIds = [...ranked].sort((a, b) => b.fused - a.fused).map((r) => r.id);
+        }
+        const metaById = new Map(ranked.map((r) => [r.id, r]));
+        const seen = new Set();
+        const out = [];
+        for (const id of orderedIds) {
+            if (seen.has(id))
+                continue;
+            seen.add(id);
+            const chunk = getChunkById(this.db, id);
+            if (!chunk)
+                continue;
+            const meta = metaById.get(id);
+            const ftsHit = ftsRows.find((x) => x.id === id);
+            const score = meta?.fused ?? 0;
             if (score < minScore)
                 continue;
-            scored.push({
+            out.push({
                 path: chunk.relPath,
                 startLine: chunk.startLine,
                 endLine: chunk.endLine,
                 score,
-                vectorScore: info.vectorScore,
-                textScore: info.textScore,
-                snippet: info.snippet ?? chunk.text.slice(0, 220),
+                vectorScore: meta?.vectorScore,
+                textScore: meta?.ftsScore,
+                snippet: ftsHit?.snippet ?? chunk.text.slice(0, 220),
                 source: "memory",
             });
+            if (out.length >= maxResults)
+                break;
         }
-        scored.sort((a, b) => b.score - a.score);
-        return scored.slice(0, maxResults);
+        return out;
+    }
+    /** Export chunks + metadata for backup / migration */
+    exportChunksSnapshot() {
+        this.ensureInitialized();
+        return {
+            formatVersion: 1,
+            exportedAt: new Date().toISOString(),
+            agentId: this.agentId,
+            chunks: listAllChunks(this.db),
+        };
+    }
+    /** Re-embed every SQLite chunk into Zvec (expensive). */
+    async reembedAll(params) {
+        this.ensureInitialized();
+        const chunks = listAllChunks(this.db);
+        let updated = 0;
+        const pause = params?.batchPauseMs ?? 0;
+        for (const ch of chunks) {
+            const vec = await this.embeddings.embed(ch.text);
+            await this.zvec.store({
+                id: ch.id,
+                text: ch.text,
+                vector: vec,
+                importance: 0.5,
+                category: "other",
+            });
+            updated++;
+            if (pause > 0) {
+                await new Promise((r) => setTimeout(r, pause));
+            }
+        }
+        return { updated };
+    }
+    /** Apply snapshot produced by `exportChunksSnapshot` (upserts SQLite + Zvec). */
+    async applyChunksSnapshot(chunks) {
+        this.ensureInitialized();
+        let imported = 0;
+        this.db.exec("BEGIN");
+        try {
+            for (const ch of chunks) {
+                upsertChunk(this.db, ch);
+                const vec = await this.embeddings.embed(ch.text);
+                await this.zvec.store({
+                    id: ch.id,
+                    text: ch.text,
+                    vector: vec,
+                    importance: 0.5,
+                    category: "other",
+                });
+                imported++;
+            }
+            this.db.exec("COMMIT");
+        }
+        catch (err) {
+            try {
+                this.db.exec("ROLLBACK");
+            }
+            catch { }
+            throw err;
+        }
+        return { imported };
     }
     async readFile(params) {
         const abs = path.join(this.workspaceDir, params.relPath);

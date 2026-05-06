@@ -103,6 +103,71 @@
         "type": "number",
         "minimum": 100,
         "maximum": 10000
+      },
+      "autoRecallTimeoutMs": {
+        "type": "number",
+        "minimum": 500,
+        "maximum": 120000
+      },
+      "retrieval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": { "type": "string", "enum": ["hybrid", "vector", "fts"] },
+          "vectorWeight": { "type": "number" },
+          "ftsWeight": { "type": "number" },
+          "minScore": { "type": "number" },
+          "hardMinScore": { "type": "number" },
+          "mmrEnabled": { "type": "boolean" },
+          "mmrLambda": { "type": "number" },
+          "mmrPoolSize": { "type": "number" }
+        }
+      },
+      "rerank": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "endpoint": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" },
+          "candidatePoolSize": { "type": "number" },
+          "timeoutMs": { "type": "number" },
+          "rerankBlendWeight": { "type": "number" }
+        }
+      },
+      "adaptive": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "minCharsEn": { "type": "number" },
+          "minCharsCjk": { "type": "number" }
+        }
+      },
+      "decay": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "halfLifeDays": { "type": "number" },
+          "blendWeight": { "type": "number" }
+        }
+      },
+      "scopes": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultMemoryScope": { "type": "string" },
+          "agentAccess": { "type": "object" }
+        }
+      },
+      "smartExtraction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" }
+        }
       }
     },
     "required": ["embedding"]

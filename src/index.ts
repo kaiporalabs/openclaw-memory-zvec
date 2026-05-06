@@ -1,3 +1,4 @@
+import fsp from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -29,6 +30,7 @@ import {
   type MemoryConfig,
   MEMORY_CATEGORIES,
 } from "./config.js";
+import { shouldSkipAdaptiveRecall } from "./adaptive-retrieval.js";
 import {
   DEFAULT_AUTO_RECALL_TIMEOUT_MS,
   extractLatestUserText,
@@ -41,6 +43,7 @@ import {
   detectCategory,
 } from "./runtime-helpers.js";
 import type { AutoCaptureCursor } from "./runtime-helpers.js";
+import type { ChunkRow } from "./sqlite-store.js";
 import { MemoryZvecStore, type MemoryEntry } from "./zvec-store.js";
 import { ZvecSqliteMemoryManager } from "./memory-manager.js";
 import { describeEmbeddingEndpoint, formatErrorDiagnostic } from "./error-diagnostic.js";
@@ -681,6 +684,138 @@ export default definePluginEntry({
           });
 
         root
+          .command("verify")
+          .description("Alias for `memory-zvec status` — full paths + embedding/Zvec self-test")
+          .option("--agent <id>", "Agent id", "main")
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const { manager, error } = await memoryRuntime.getMemorySearchManager({
+              cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
+              agentId,
+              purpose: "status",
+            });
+            if (!manager) {
+              console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
+              return;
+            }
+            try {
+              console.log(JSON.stringify({ ok: true, status: manager.status() }, null, 2));
+            } finally {
+              await manager.close?.().catch(() => undefined);
+            }
+          });
+
+        root
+          .command("export")
+          .description("Export SQLite chunk metadata + IDs as JSON (vectors are not serialized; re-run index/reembed to rebuild Zvec)")
+          .option("--agent <id>", "Agent id", "main")
+          .option("-o, --output <path>", "Write to file instead of stdout")
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const { manager, error } = await memoryRuntime.getMemorySearchManager({
+              cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
+              agentId,
+              purpose: "cli",
+            });
+            if (!manager) {
+              console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            try {
+              const zm = manager as ZvecSqliteMemoryManager;
+              const snap = zm.exportChunksSnapshot();
+              const json = `${JSON.stringify(snap, null, 2)}\n`;
+              const outPath = typeof opts.output === "string" ? opts.output.trim() : "";
+              if (outPath.length > 0) {
+                await fsp.writeFile(outPath, json, "utf8");
+                console.log(JSON.stringify({ ok: true, written: outPath, chunks: snap.chunks.length }, null, 2));
+              } else {
+                console.log(json.trimEnd());
+              }
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+              process.exitCode = 1;
+            } finally {
+              await manager.close?.().catch(() => undefined);
+            }
+          });
+
+        root
+          .command("import")
+          .description("Import chunks JSON (from export); upserts SQLite + Zvec embeddings")
+          .option("--agent <id>", "Agent id", "main")
+          .requiredOption("-i, --input <path>", "JSON file path")
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const inputPath = typeof opts.input === "string" ? opts.input.trim() : "";
+            const { manager, error } = await memoryRuntime.getMemorySearchManager({
+              cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
+              agentId,
+              purpose: "cli",
+            });
+            if (!manager) {
+              console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            try {
+              const raw = await fsp.readFile(inputPath, "utf8");
+              const parsed = JSON.parse(raw) as { chunks?: unknown };
+              if (!parsed.chunks || !Array.isArray(parsed.chunks)) {
+                throw new Error('JSON must contain a "chunks" array');
+              }
+              const zm = manager as ZvecSqliteMemoryManager;
+              const result = await zm.applyChunksSnapshot(parsed.chunks as ChunkRow[]);
+              console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+              process.exitCode = 1;
+            } finally {
+              await manager.close?.().catch(() => undefined);
+            }
+          });
+
+        root
+          .command("reembed")
+          .description("Recompute embeddings for every SQLite chunk and upsert into Zvec")
+          .option("--agent <id>", "Agent id", "main")
+          .option("--pause <ms>", "Optional pause between chunks (rate limiting)", "0")
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const { manager, error } = await memoryRuntime.getMemorySearchManager({
+              cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
+              agentId,
+              purpose: "cli",
+            });
+            if (!manager) {
+              console.log(JSON.stringify({ ok: false, error: error ?? "memory manager unavailable" }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            try {
+              const zm = manager as ZvecSqliteMemoryManager;
+              const pause = Number.parseInt(String(opts.pause ?? "0"), 10);
+              const result = await zm.reembedAll({
+                batchPauseMs: Number.isFinite(pause) ? Math.max(0, pause) : 0,
+              });
+              console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+              process.exitCode = 1;
+            } finally {
+              await manager.close?.().catch(() => undefined);
+            }
+          });
+
+        root
           .command("status")
           .description(
             "Print memory manager status as JSON (paths, SQLite, Zvec, embedding self-test). Use this if `openclaw memory status` is served by another plugin.",
@@ -813,19 +948,31 @@ export default definePluginEntry({
             event.prompt,
           currentCfg.recallMaxChars,
         );
+        if (
+          shouldSkipAdaptiveRecall({
+            query: recallQuery,
+            enabled: currentCfg.adaptive.enabled,
+            minCharsEn: currentCfg.adaptive.minCharsEn,
+            minCharsCjk: currentCfg.adaptive.minCharsCjk,
+          })
+        ) {
+          return undefined;
+        }
+        const recallTimeoutMs =
+          typeof currentCfg.autoRecallTimeoutMs === "number"
+            ? currentCfg.autoRecallTimeoutMs
+            : DEFAULT_AUTO_RECALL_TIMEOUT_MS;
         const recall = await runWithTimeout({
-          timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+          timeoutMs: recallTimeoutMs,
           task: async () => {
             const vector = await embeddings.embed(recallQuery, {
-              timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+              timeoutMs: recallTimeoutMs,
             });
             return await db.search(vector, 3, 0.3);
           },
         });
         if (recall.status === "timeout") {
-          api.logger.warn?.(
-            `memory-zvec: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms`,
-          );
+          api.logger.warn?.(`memory-zvec: auto-recall timed out after ${recallTimeoutMs}ms`);
           return undefined;
         }
         const results = recall.value;
