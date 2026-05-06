@@ -51,6 +51,15 @@ function buildSchema(vectorDim) {
         ],
     });
 }
+function moveAsideExistingPath(p) {
+    if (!fs.existsSync(p)) {
+        return null;
+    }
+    const ts = new Date().toISOString().replaceAll(":", "-");
+    const backup = `${p}.backup-${ts}`;
+    fs.renameSync(p, backup);
+    return backup;
+}
 export class MemoryZvecStore {
     dataRoot;
     vectorDim;
@@ -88,6 +97,9 @@ export class MemoryZvecStore {
             coll = ZVecOpen(this.collectionPath);
         }
         catch {
+            // If the path exists but isn't a valid Zvec collection, creation will fail with
+            // "path validate failed ... exists". Move it aside to avoid a hard-brick.
+            moveAsideExistingPath(this.collectionPath);
             coll = ZVecCreateAndOpen(this.collectionPath, schema, {});
         }
         const vec = coll.schema.vector("embedding");
