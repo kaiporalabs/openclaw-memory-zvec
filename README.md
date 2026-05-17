@@ -3,7 +3,8 @@
 Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw) using [**Zvec**](https://github.com/alibaba/zvec) via the official Node binding [`@zvec/zvec`](https://www.npmjs.com/package/@zvec/zvec). Vectors are indexed with an **HNSW** index and **cosine** distance; recall and capture follow the usual OpenClaw memory-plugin patterns (tools + optional auto-recall / auto-capture).
 
 **npm package:** `@kaiporalabs/openclaw-memory-zvec`  
-**OpenClaw plugin id:** `memory-zvec` (see `openclaw.plugin.json`)
+**OpenClaw plugin id:** `memory-zvec` (see `openclaw.plugin.json`)  
+**Changelog:** [CHANGELOG.md](CHANGELOG.md)
 
 ## Features
 
@@ -265,7 +266,7 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | `autoRecallTimeoutMs` | Max time for auto-recall search (default `15000`). Increase if embedding API is slow. |
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
 | `captureMaxChars` / `recallMaxChars` | Length limits for capture and recall query text. |
-| `dreaming` | Reserved for OpenClaw dreaming integration when this plugin owns the memory slot. |
+| `dreaming` | Nightly (cron) promotion of recent `memory/*.md` chunks into `MEMORY.md` + optional report under `memory/dreaming/`. `enabled: true`, `frequency` cron (default `0 3 * * *`). Uses OpenClaw cron + isolated agent turn (same pattern as memory-core). |
 
 ### Troubleshooting
 

@@ -32,6 +32,7 @@ import {
   defaultZvecDataRootFromCfg,
   listMemoryZvecPublicArtifacts,
 } from "./public-artifacts.js";
+import { registerMemoryZvecDreaming } from "./dreaming/register.js";
 import { createEmbeddings } from "./embeddings.js";
 import {
   memoryConfigSchema,
@@ -394,6 +395,11 @@ export default definePluginEntry({
         await manager.close?.().catch(() => undefined);
       }
     };
+
+    registerMemoryZvecDreaming(api, {
+      memoryRuntime,
+      getRuntimeCfg,
+    });
 
     api.registerMemoryCapability({
       runtime: memoryRuntime,

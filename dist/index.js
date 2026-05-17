@@ -18,6 +18,7 @@ import { buildMemoryZvecFlushPlan } from "./flush-plan.js";
 import { appendMemoryNote } from "./markdown-memory.js";
 import { resolveMemoryGetRelPath } from "./memory-get-params.js";
 import { defaultZvecDataRootFromCfg, listMemoryZvecPublicArtifacts, } from "./public-artifacts.js";
+import { registerMemoryZvecDreaming } from "./dreaming/register.js";
 import { createEmbeddings } from "./embeddings.js";
 import { memoryConfigSchema, resolveDefaultDbPath, resolveDefaultSqlitePath, vectorDimsForModel, MEMORY_CATEGORIES, } from "./config.js";
 import { shouldSkipAdaptiveRecall } from "./adaptive-retrieval.js";
@@ -296,6 +297,10 @@ export default definePluginEntry({
                 await manager.close?.().catch(() => undefined);
             }
         };
+        registerMemoryZvecDreaming(api, {
+            memoryRuntime,
+            getRuntimeCfg,
+        });
         api.registerMemoryCapability({
             runtime: memoryRuntime,
             promptBuilder,
