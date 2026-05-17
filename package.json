@@ -1,6 +1,6 @@
 {
   "name": "@kaiporalabs/openclaw-memory-zvec",
-  "version": "1.2.4",
+  "version": "2.0.0",
   "description": "OpenClaw long-term memory plugin backed by Alibaba Zvec (dense vector ANN)",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,6 +13,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -47,7 +48,8 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "openclaw": "2026.5.3-1",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
   },
   "openclaw": {
     "extensions": [

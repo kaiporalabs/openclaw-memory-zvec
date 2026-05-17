@@ -95,6 +95,15 @@ export function deleteChunksForFile(db, relPath) {
         db.prepare(`DELETE FROM memory_chunks_fts WHERE id = ?`).run(row.id);
     }
 }
+export function deleteChunkById(db, id) {
+    const row = getChunkById(db, id);
+    if (!row) {
+        return false;
+    }
+    db.prepare(`DELETE FROM memory_chunks WHERE id = ?`).run(id);
+    db.prepare(`DELETE FROM memory_chunks_fts WHERE id = ?`).run(id);
+    return true;
+}
 export function upsertChunk(db, chunk) {
     const scope = chunk.scope ?? "global";
     db.prepare(`

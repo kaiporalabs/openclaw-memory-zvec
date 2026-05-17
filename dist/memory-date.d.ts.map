@@ -1,0 +1,1 @@
+{"version":3,"file":"memory-date.d.ts","sourceRoot":"","sources":["../src/memory-date.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,cAAc,EAAE,MAAM,kCAAkC,CAAC;AAGvE,wBAAgB,yBAAyB,CAAC,KAAK,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,MAAM,CAcjF;AAED,wBAAgB,yBAAyB,CAAC,MAAM,EAAE;IAChD,GAAG,CAAC,EAAE,cAAc,CAAC;IACrB,KAAK,CAAC,EAAE,MAAM,CAAC;CAChB,GAAG,MAAM,CAKT"}

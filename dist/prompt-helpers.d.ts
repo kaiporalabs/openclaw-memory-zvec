@@ -7,6 +7,7 @@ export declare function escapeMemoryForPrompt(text: string): string;
 export declare function formatRelevantMemoriesContext(memories: Array<{
     category: MemoryCategory;
     text: string;
+    path?: string;
 }>): string;
 export declare function shouldCapture(text: string, options?: {
     maxChars?: number;

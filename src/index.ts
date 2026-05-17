@@ -15,11 +15,23 @@ import path from "node:path";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  definePluginEntry,
+  type OpenClawPluginApi,
+  type OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type {
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolvePluginAgentId } from "./agent-context.js";
+import { buildMemoryZvecFlushPlan } from "./flush-plan.js";
+import { appendMemoryNote } from "./markdown-memory.js";
+import { resolveMemoryGetRelPath } from "./memory-get-params.js";
+import {
+  defaultZvecDataRootFromCfg,
+  listMemoryZvecPublicArtifacts,
+} from "./public-artifacts.js";
 import { createEmbeddings } from "./embeddings.js";
 import {
   memoryConfigSchema,
@@ -44,7 +56,8 @@ import {
 } from "./runtime-helpers.js";
 import type { AutoCaptureCursor } from "./runtime-helpers.js";
 import type { ChunkRow } from "./sqlite-store.js";
-import { MemoryZvecStore, type MemoryEntry } from "./zvec-store.js";
+import { MemoryZvecStore } from "./zvec-store.js";
+import type { MemoryEntry } from "./zvec-store.js";
 import { ZvecSqliteMemoryManager } from "./memory-manager.js";
 import { describeEmbeddingEndpoint, formatErrorDiagnostic } from "./error-diagnostic.js";
 import { formatMemoryStatusCliOutput } from "./format-memory-status-cli.js";
@@ -185,6 +198,9 @@ export default definePluginEntry({
     const userSetSqlitePathAtRegistration =
       typeof registrationPluginConfig.sqlitePath === "string" &&
       registrationPluginConfig.sqlitePath.trim().length > 0;
+    const userSetDbPathAtRegistration =
+      typeof registrationPluginConfig.dbPath === "string" &&
+      registrationPluginConfig.dbPath.trim().length > 0;
 
     try {
       cfg = memoryConfigSchema.parse(api.pluginConfig, { agentId: "main" });
@@ -207,9 +223,24 @@ export default definePluginEntry({
         : vectorDimsForModel(cfg.embedding.model);
 
     const disabledHookCfg = { ...cfg, autoCapture: false, autoRecall: false };
-    const db = new MemoryZvecStore(resolvedDataRoot, vectorDim);
-    const embeddings = createEmbeddings(api, cfg);
     const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
+
+    const getRuntimeCfg = (): OpenClawConfig =>
+      (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+
+    const resolveToolAgentId = (ctx: OpenClawPluginToolContext): string =>
+      resolvePluginAgentId({
+        agentId: ctx.agentId,
+        sessionKey: ctx.sessionKey,
+        cfg: getRuntimeCfg(),
+      });
+
+    const resolveHookAgentId = (ctx: { agentId?: string; sessionKey?: string }): string =>
+      resolvePluginAgentId({
+        agentId: ctx.agentId,
+        sessionKey: ctx.sessionKey,
+        cfg: getRuntimeCfg(),
+      });
 
     const resolveCurrentHookConfig = (agentId: string): MemoryConfig => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
@@ -235,7 +266,7 @@ export default definePluginEntry({
             ...asRecord(asRecord(runtimePluginConfig)?.embedding),
           },
           ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
-          dbPath: cfg.dbPath,
+          ...(userSetDbPathAtRegistration ? { dbPath: cfg.dbPath } : {}),
           // Do not inject schema-default sqlitePath from registration (main.sqlite) for every
           // agent; omit so re-parse uses resolveDefaultSqlitePath(agentId). Only pass through when
           // the user set sqlitePath in plugin config, or when live config sets it (spread below).
@@ -313,7 +344,9 @@ export default definePluginEntry({
               );
             });
           } else {
-            await manager.sync({ reason: "open", force: false }).catch(() => undefined);
+            await manager
+              .sync({ reason: params.purpose ?? "open", force: false })
+              .catch(() => undefined);
           }
           return { manager };
         } catch (err) {
@@ -340,66 +373,98 @@ export default definePluginEntry({
       ];
     };
 
+    const withMemoryManager = async <T>(
+      agentId: string,
+      sessionKey: string | undefined,
+      purpose: "cli" | "default" | "status",
+      fn: (manager: ZvecSqliteMemoryManager) => Promise<T>,
+    ): Promise<{ ok: true; value: T } | { ok: false; error: string }> => {
+      const { manager, error } = await memoryRuntime.getMemorySearchManager({
+        cfg: getRuntimeCfg(),
+        agentId,
+        purpose,
+      });
+      if (!manager) {
+        return { ok: false, error: error ?? "memory manager unavailable" };
+      }
+      try {
+        const value = await fn(manager as ZvecSqliteMemoryManager);
+        return { ok: true, value };
+      } finally {
+        await manager.close?.().catch(() => undefined);
+      }
+    };
+
     api.registerMemoryCapability({
       runtime: memoryRuntime,
       promptBuilder,
-      flushPlanResolver: () => null,
+      flushPlanResolver: buildMemoryZvecFlushPlan,
+      publicArtifacts: {
+        listArtifacts: async (params) =>
+          listMemoryZvecPublicArtifacts({
+            cfg: params.cfg,
+            resolveWorkspaceDir: (agentId) => {
+              const dir = api.runtime.agent.resolveAgentWorkspaceDir(params.cfg, agentId);
+              return typeof dir === "string" && dir.trim().length > 0 ? dir : undefined;
+            },
+            resolveZvecDataRoot: () => {
+              const raw = defaultZvecDataRootFromCfg(params.cfg);
+              if (!raw) {
+                return resolvedDataRoot;
+              }
+              return raw.includes("://") ? raw : api.resolvePath(raw);
+            },
+          }),
+      },
     });
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_recall",
         label: "Memory Recall",
         description:
-          "Search long-term memories (Zvec ANN). Use for user preferences, past decisions, or prior topics.",
+          "Search workspace memory (hybrid vector + keyword). Alias for memory_search over MEMORY.md and memory/.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
           limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
         }),
         async execute(_toolCallId, params) {
           const { query, limit = 5 } = params as { query: string; limit?: number };
-          const currentCfg = resolveCurrentHookConfig("main");
-          const vector = await embeddings.embed(
-            normalizeRecallQuery(query, currentCfg.recallMaxChars),
-          );
-          const results = await db.search(vector, limit, 0.1);
-
+          const agentId = resolveToolAgentId(ctx);
+          const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) => {
+            return manager.search(query, { maxResults: limit, minScore: 0.1 });
+          });
+          if (!run.ok) {
+            throw new Error(run.error);
+          }
+          const results = run.value;
           if (results.length === 0) {
             return {
               content: [{ type: "text", text: "No relevant memories found." }],
               details: { count: 0 },
             };
           }
-
           const text = results
             .map(
               (r, i) =>
-                `${i + 1}. [${r.entry.category}] ${r.entry.text} (${(r.score * 100).toFixed(0)}%)`,
+                `${i + 1}. ${r.path}:${r.startLine}-${r.endLine} (${(r.score * 100).toFixed(0)}%)\n${r.snippet}`,
             )
-            .join("\n");
-
-          const sanitizedResults = results.map((r) => ({
-            id: r.entry.id,
-            text: r.entry.text,
-            category: r.entry.category,
-            importance: r.entry.importance,
-            score: r.score,
-          }));
-
+            .join("\n\n");
           return {
             content: [{ type: "text", text: `Found ${results.length} memories:\n\n${text}` }],
-            details: { count: results.length, memories: sanitizedResults },
+            details: { count: results.length, results },
           };
         },
-      },
+      }),
       { name: "memory_recall" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_store",
         label: "Memory Store",
-        description: "Persist important information in Zvec-backed long-term memory.",
+        description:
+          "Persist important information in workspace memory (appends to memory/YYYY-MM-DD.md and indexes).",
         parameters: Type.Object({
           text: Type.String({ description: "Information to remember" }),
           importance: Type.Optional(Type.Number({ description: "Importance 0-1 (default: 0.7)" })),
@@ -413,65 +478,93 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const {
             text,
-            importance = 0.7,
             category = "other",
           } = params as {
             text: string;
             importance?: number;
             category?: MemoryEntry["category"];
           };
-
-          const vector = await embeddings.embed(text);
-          const existing = await db.search(vector, 1, 0.95);
-          if (existing.length > 0) {
+          void params;
+          const agentId = resolveToolAgentId(ctx);
+          const baseCfg = getRuntimeCfg();
+          const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) => {
+            const dupes = await manager.search(text, { maxResults: 1, minScore: 0.95 });
+            if (dupes.length > 0) {
+              return {
+                action: "duplicate" as const,
+                existingText: dupes[0]!.snippet,
+                relPath: dupes[0]!.path,
+              };
+            }
+            const written = await appendMemoryNote({
+              workspaceDir: manager.getWorkspaceDir(),
+              text,
+              category,
+              cfg: baseCfg,
+            });
+            await manager.sync?.({ reason: "memory_store", force: false });
+            return { action: "created" as const, relPath: written.relPath };
+          });
+          if (!run.ok) {
+            throw new Error(run.error);
+          }
+          const result = run.value;
+          if (result.action === "duplicate") {
             return {
               content: [
                 {
                   type: "text",
-                  text: `Similar memory already exists: "${existing[0].entry.text}"`,
+                  text: `Similar memory already exists: "${result.existingText}"`,
                 },
               ],
-              details: {
-                action: "duplicate",
-                existingId: existing[0].entry.id,
-                existingText: existing[0].entry.text,
-              },
+              details: { action: "duplicate", existingText: result.existingText, path: result.relPath },
             };
           }
-
-          const entry = await db.store({
-            text,
-            vector,
-            importance,
-            category,
-          });
-
           return {
-            content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}..."` }],
-            details: { action: "created", id: entry.id },
+            content: [{ type: "text", text: `Stored in ${result.relPath}: "${text.slice(0, 100)}..."` }],
+            details: { action: "created", path: result.relPath },
           };
         },
-      },
+      }),
       { name: "memory_store" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_forget",
         label: "Memory Forget",
-        description: "Delete memories by id or by semantic match.",
+        description: "Delete indexed memory chunks by id or semantic match.",
         parameters: Type.Object({
           query: Type.Optional(Type.String({ description: "Search to find memory" })),
-          memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
+          memoryId: Type.Optional(Type.String({ description: "Specific chunk or legacy memory ID" })),
         }),
         async execute(_toolCallId, params) {
           const { query, memoryId } = params as { query?: string; memoryId?: string };
+          const agentId = resolveToolAgentId(ctx);
 
           if (memoryId) {
-            if (!UUID_RE.test(memoryId)) {
-              throw new Error(`Invalid memory ID format: ${memoryId}`);
+            const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) => {
+              const deleted = await manager.forgetById(memoryId);
+              if (deleted) {
+                return { action: "deleted" as const, id: memoryId };
+              }
+              if (UUID_RE.test(memoryId)) {
+                const legacy = await manager.forgetLegacyVectorId(memoryId);
+                if (legacy) {
+                  return { action: "deleted_legacy" as const, id: memoryId };
+                }
+              }
+              return { action: "not_found" as const };
+            });
+            if (!run.ok) {
+              throw new Error(run.error);
             }
-            await db.delete(memoryId);
+            if (run.value.action === "not_found") {
+              return {
+                content: [{ type: "text", text: `No memory found for id ${memoryId}.` }],
+                details: { action: "not_found", id: memoryId },
+              };
+            }
             return {
               content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
               details: { action: "deleted", id: memoryId },
@@ -479,46 +572,36 @@ export default definePluginEntry({
           }
 
           if (query) {
-            const currentCfg = resolveCurrentHookConfig("main");
-            const vector = await embeddings.embed(
-              normalizeRecallQuery(query, currentCfg.recallMaxChars),
+            const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) =>
+              manager.forgetByQuery(query, 0.7),
             );
-            const results = await db.search(vector, 5, 0.7);
-
-            if (results.length === 0) {
+            if (!run.ok) {
+              throw new Error(run.error);
+            }
+            const result = run.value;
+            if (result.action === "not_found") {
               return {
                 content: [{ type: "text", text: "No matching memories found." }],
                 details: { found: 0 },
               };
             }
-
-            if (results.length === 1 && results[0].score > 0.9) {
-              await db.delete(results[0].entry.id);
+            if (result.action === "deleted") {
               return {
-                content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }],
-                details: { action: "deleted", id: results[0].entry.id },
+                content: [{ type: "text", text: `Forgotten: "${result.text ?? query}"` }],
+                details: { action: "deleted", id: result.id },
               };
             }
-
-            const list = results
-              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
+            const list = (result.candidates ?? [])
+              .map((r) => `- [${r.id}] ${r.text.slice(0, 60)}...`)
               .join("\n");
-
-            const sanitizedCandidates = results.map((r) => ({
-              id: r.entry.id,
-              text: r.entry.text,
-              category: r.entry.category,
-              score: r.score,
-            }));
-
             return {
               content: [
                 {
                   type: "text",
-                  text: `Found ${results.length} candidates. Specify memoryId:\n${list}`,
+                  text: `Found ${result.candidates?.length ?? 0} candidates. Specify memoryId:\n${list}`,
                 },
               ],
-              details: { action: "candidates", candidates: sanitizedCandidates },
+              details: { action: "candidates", candidates: result.candidates },
             };
           }
 
@@ -527,13 +610,12 @@ export default definePluginEntry({
             details: { error: "missing_param" },
           };
         },
-      },
+      }),
       { name: "memory_forget" },
     );
 
-    // OpenClaw memory slot tools (parity with memory-core).
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_search",
         label: "Memory Search",
         description:
@@ -549,18 +631,17 @@ export default definePluginEntry({
             maxResults?: number;
             minScore?: number;
           };
-          const { manager, error } = await memoryRuntime.getMemorySearchManager({
-            cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
-            agentId: "main",
-            purpose: "default",
-          });
-          if (!manager) {
-            throw new Error(error ?? "memory manager unavailable");
+          const agentId = resolveToolAgentId(ctx);
+          const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) =>
+            manager.search(query, {
+              ...(typeof maxResults === "number" ? { maxResults } : {}),
+              ...(typeof minScore === "number" ? { minScore } : {}),
+            }),
+          );
+          if (!run.ok) {
+            throw new Error(run.error);
           }
-          const results = await manager.search(query, {
-            ...(typeof maxResults === "number" ? { maxResults } : {}),
-            ...(typeof minScore === "number" ? { minScore } : {}),
-          });
+          const results = run.value;
           if (results.length === 0) {
             return { content: [{ type: "text", text: "No results." }], details: { count: 0 } };
           }
@@ -575,41 +656,44 @@ export default definePluginEntry({
             details: { count: results.length, results },
           };
         },
-      },
+      }),
       { name: "memory_search" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_get",
         label: "Memory Get",
         description: "Read a file segment from the workspace memory corpus.",
         parameters: Type.Object({
-          relPath: Type.String({ description: "Workspace-relative path" }),
+          path: Type.Optional(Type.String({ description: "Workspace-relative path (memory-core)" })),
+          relPath: Type.Optional(Type.String({ description: "Workspace-relative path (alias)" })),
           from: Type.Optional(Type.Number({ description: "1-indexed start line (default: 1)" })),
           lines: Type.Optional(Type.Number({ description: "Line count (default: 200)" })),
         }),
         async execute(_toolCallId, params) {
-          const { relPath, from, lines } = params as { relPath: string; from?: number; lines?: number };
-          const { manager, error } = await memoryRuntime.getMemorySearchManager({
-            cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
-            agentId: "main",
-            purpose: "default",
-          });
-          if (!manager) {
-            throw new Error(error ?? "memory manager unavailable");
+          const relPath = resolveMemoryGetRelPath(
+            params as { path?: string; relPath?: string },
+          );
+          const { from, lines } = params as { from?: number; lines?: number };
+          const agentId = resolveToolAgentId(ctx);
+          const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) =>
+            manager.readFile({
+              relPath,
+              ...(typeof from === "number" ? { from } : {}),
+              ...(typeof lines === "number" ? { lines } : {}),
+            }),
+          );
+          if (!run.ok) {
+            throw new Error(run.error);
           }
-          const res = await manager.readFile({
-            relPath,
-            ...(typeof from === "number" ? { from } : {}),
-            ...(typeof lines === "number" ? { lines } : {}),
-          });
+          const res = run.value;
           return {
             content: [{ type: "text", text: res.text }],
             details: res,
           };
         },
-      },
+      }),
       { name: "memory_get" },
     );
 
@@ -648,39 +732,72 @@ export default definePluginEntry({
 
         root
           .command("list")
-          .description("List memories (metadata only)")
+          .description("List indexed memory chunks (metadata)")
+          .option("--agent <id>", "Agent id", "main")
           .option("--limit <n>", "Max results")
-          .option("--order-by-created-at", "Order by createdAt descending", false)
           .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
             const limit = parsePositiveIntegerOption(opts.limit, "--limit");
-            const entries = await db.list(limit, Boolean(opts.orderByCreatedAt));
-            console.log(JSON.stringify(entries, null, 2));
+            const run = await withMemoryManager(agentId, undefined, "cli", async (manager) =>
+              manager.exportChunksSnapshot(),
+            );
+            if (!run.ok) {
+              console.log(JSON.stringify({ ok: false, error: run.error }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            const chunks = run.value.chunks;
+            const slice = typeof limit === "number" ? chunks.slice(0, limit) : chunks;
+            console.log(JSON.stringify(slice, null, 2));
           });
 
         root
           .command("search")
-          .description("Vector search memories")
+          .description("Hybrid search workspace memory")
           .argument("<query>", "Search query")
+          .option("--agent <id>", "Agent id", "main")
           .option("--limit <n>", "Max results", "5")
           .action(async (query, opts) => {
-            const vector = await embeddings.embed(normalizeRecallQuery(query, cfg.recallMaxChars));
-            const results = await db.search(vector, Number.parseInt(opts.limit, 10), 0.3);
-            const output = results.map((r) => ({
-              id: r.entry.id,
-              text: r.entry.text,
-              category: r.entry.category,
-              importance: r.entry.importance,
-              score: r.score,
-            }));
-            console.log(JSON.stringify(output, null, 2));
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const run = await withMemoryManager(agentId, undefined, "cli", async (manager) =>
+              manager.search(query, { maxResults: Number.parseInt(opts.limit, 10), minScore: 0.2 }),
+            );
+            if (!run.ok) {
+              console.log(JSON.stringify({ ok: false, error: run.error }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            console.log(JSON.stringify(run.value, null, 2));
           });
 
         root
           .command("stats")
-          .description("Show memory statistics")
-          .action(async () => {
-            const count = await db.count();
-            console.log(`Total memories: ${count}`);
+          .description("Show memory index statistics")
+          .option("--agent <id>", "Agent id", "main")
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const run = await withMemoryManager(agentId, undefined, "cli", async (manager) => manager.status());
+            if (!run.ok) {
+              console.log(JSON.stringify({ ok: false, error: run.error }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            const st = run.value;
+            console.log(
+              JSON.stringify(
+                {
+                  files: st.files,
+                  chunks: st.chunks,
+                  vector: st.vector,
+                  fts: st.fts,
+                },
+                null,
+                2,
+              ),
+            );
           });
 
         root
@@ -877,16 +994,16 @@ export default definePluginEntry({
         memory
           .command("reindex")
           .description("Force a full reindex of workspace memory files")
-          .action(async () => {
-            const { manager, error } = await memoryRuntime.getMemorySearchManager({
-              cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
-              agentId: "main",
-              purpose: "cli",
+          .option("--agent <id>", "Agent id", "main")
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const run = await withMemoryManager(agentId, undefined, "cli", async (manager) => {
+              await manager.sync?.({ reason: "cli reindex", force: true });
             });
-            if (!manager) {
-              throw new Error(error ?? "memory manager unavailable");
+            if (!run.ok) {
+              throw new Error(run.error);
             }
-            await manager.sync?.({ reason: "cli reindex", force: true });
             console.log("ok");
           });
 
@@ -894,48 +1011,50 @@ export default definePluginEntry({
           .command("search")
           .description("Hybrid search")
           .argument("<query>", "Query")
+          .option("--agent <id>", "Agent id", "main")
           .option("--limit <n>", "Max results", "8")
           .action(async (query, opts) => {
-            const { manager, error } = await memoryRuntime.getMemorySearchManager({
-              cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
-              agentId: "main",
-              purpose: "cli",
-            });
-            if (!manager) {
-              throw new Error(error ?? "memory manager unavailable");
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const run = await withMemoryManager(agentId, undefined, "cli", async (manager) =>
+              manager.search(query, { maxResults: Number(opts.limit) }),
+            );
+            if (!run.ok) {
+              throw new Error(run.error);
             }
-            const results = await manager.search(query, { maxResults: Number(opts.limit) });
-            console.log(JSON.stringify(results, null, 2));
+            console.log(JSON.stringify(run.value, null, 2));
           });
 
         memory
           .command("get")
           .description("Read a file segment")
-          .argument("<relPath>", "Workspace-relative path")
+          .argument("<path>", "Workspace-relative path")
+          .option("--agent <id>", "Agent id", "main")
           .option("--from <n>", "1-indexed start line", "1")
           .option("--lines <n>", "Line count", "200")
-          .action(async (relPath, opts) => {
-            const { manager, error } = await memoryRuntime.getMemorySearchManager({
-              cfg: (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
-              agentId: "main",
-              purpose: "cli",
-            });
-            if (!manager) {
-              throw new Error(error ?? "memory manager unavailable");
+          .action(async (filePath, opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const relPath = resolveMemoryGetRelPath({ path: filePath });
+            const run = await withMemoryManager(agentId, undefined, "cli", async (manager) =>
+              manager.readFile({
+                relPath,
+                from: Number(opts.from),
+                lines: Number(opts.lines),
+              }),
+            );
+            if (!run.ok) {
+              throw new Error(run.error);
             }
-            const res = await manager.readFile({
-              relPath,
-              from: Number(opts.from),
-              lines: Number(opts.lines),
-            });
-            console.log(res.text);
+            console.log(run.value.text);
           });
       },
       { commands: ["memory"] },
     );
 
-    api.on("before_prompt_build", async (event) => {
-      const currentCfg = resolveCurrentHookConfig("main");
+    api.on("before_prompt_build", async (event, ctx) => {
+      const agentId = resolveHookAgentId(ctx);
+      const currentCfg = resolveCurrentHookConfig(agentId);
       if (!currentCfg.autoRecall) {
         return undefined;
       }
@@ -972,10 +1091,13 @@ export default definePluginEntry({
         const recall = await runWithTimeout({
           timeoutMs: recallTimeoutMs,
           task: async () => {
-            const vector = await embeddings.embed(recallQuery, {
-              timeoutMs: recallTimeoutMs,
-            });
-            return await db.search(vector, 3, 0.3);
+            const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) =>
+              manager.search(recallQuery, { maxResults: 3, minScore: 0.3 }),
+            );
+            if (!run.ok) {
+              throw new Error(run.error);
+            }
+            return run.value;
           },
         });
         if (recall.status === "timeout") {
@@ -992,19 +1114,24 @@ export default definePluginEntry({
 
         return {
           prependContext: formatRelevantMemoriesContext(
-            results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
+            results.map((r) => ({
+              category: "other" as const,
+              text: r.snippet ?? r.path,
+              path: `${r.path}:${r.startLine}-${r.endLine}`,
+            })),
           ),
         };
       } catch (err) {
         api.logger.warn(
-          `memory-zvec: recall failed [${describeEmbeddingEndpoint(currentCfg.embedding)}]: ${formatErrorDiagnostic(err)}`,
+          `memory-zvec: recall failed [agent=${agentId}] [${describeEmbeddingEndpoint(currentCfg.embedding)}]: ${formatErrorDiagnostic(err)}`,
         );
       }
       return undefined;
     });
 
     api.on("agent_end", async (event, ctx) => {
-      const currentCfg = resolveCurrentHookConfig("main");
+      const agentId = resolveHookAgentId(ctx);
+      const currentCfg = resolveCurrentHookConfig(agentId);
       if (!currentCfg.autoCapture) {
         return;
       }
@@ -1020,6 +1147,7 @@ export default definePluginEntry({
         );
         let stored = 0;
         let capturableSeen = 0;
+        const baseCfg = getRuntimeCfg();
         for (let index = startIndex; index < event.messages.length; index++) {
           const message = event.messages[index];
           let messageProcessed = false;
@@ -1035,20 +1163,26 @@ export default definePluginEntry({
               }
 
               const category = detectCategory(text);
-              const vector = await embeddings.embed(text);
-
-              const existing = await db.search(vector, 1, 0.95);
-              if (existing.length > 0) {
-                continue;
-              }
-
-              await db.store({
-                text,
-                vector,
-                importance: 0.7,
-                category,
+              const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) => {
+                const dupes = await manager.search(text, { maxResults: 1, minScore: 0.95 });
+                if (dupes.length > 0) {
+                  return false;
+                }
+                const note = await appendMemoryNote({
+                  workspaceDir: manager.getWorkspaceDir(),
+                  text,
+                  category,
+                  cfg: baseCfg,
+                });
+                if (!note.appended) {
+                  return false;
+                }
+                await manager.sync?.({ reason: "auto-capture", force: false });
+                return true;
               });
-              stored++;
+              if (run.ok && run.value) {
+                stored++;
+              }
             }
             messageProcessed = true;
           } finally {
@@ -1062,12 +1196,11 @@ export default definePluginEntry({
         }
 
         if (stored > 0) {
-          api.logger.info(`memory-zvec: auto-captured ${stored} memories`);
+          api.logger.info(`memory-zvec: auto-captured ${stored} memories [agent=${agentId}]`);
         }
       } catch (err) {
-        const capCfg = resolveCurrentHookConfig("main");
         api.logger.warn(
-          `memory-zvec: capture failed [${describeEmbeddingEndpoint(capCfg.embedding)}]: ${formatErrorDiagnostic(err)}`,
+          `memory-zvec: capture failed [agent=${agentId}] [${describeEmbeddingEndpoint(currentCfg.embedding)}]: ${formatErrorDiagnostic(err)}`,
         );
       }
     });
@@ -1089,7 +1222,6 @@ export default definePluginEntry({
         );
       },
       stop: () => {
-        void db.close();
         api.logger.info("memory-zvec: stopped");
       },
     });

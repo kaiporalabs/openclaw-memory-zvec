@@ -41,6 +41,7 @@ import { isScopeAllowed, resolveAllowedScopes } from "./scopes.js";
 import type { ChunkRow } from "./sqlite-store.js";
 import {
   computeChunkId,
+  deleteChunkById,
   deleteChunksForFile,
   fileState,
   getChunkById,
@@ -381,26 +382,26 @@ export class ZvecSqliteMemoryManager implements MemorySearchManager {
   }
 
   async sync(params?: { reason?: string; force?: boolean }): Promise<void> {
-    void params;
     this.ensureInitialized();
 
     const files = await crawlFiles(this.workspaceDir);
+    const memScope = this.cfg.scopes.defaultMemoryScope;
 
-    this.db.exec("BEGIN");
-    try {
-      for (const relPath of files) {
-        const absPath = path.join(this.workspaceDir, relPath);
-        const st = await fsp.stat(absPath);
-        const prev = fileState(this.db, relPath);
-        if (!params?.force && prev && prev.mtimeMs === st.mtimeMs && prev.sizeBytes === st.size) {
-          continue;
-        }
+    for (const relPath of files) {
+      const absPath = path.join(this.workspaceDir, relPath);
+      const st = await fsp.stat(absPath);
+      const prev = fileState(this.db, relPath);
+      if (!params?.force && prev && prev.mtimeMs === st.mtimeMs && prev.sizeBytes === st.size) {
+        continue;
+      }
 
-        const raw = await fsp.readFile(absPath, "utf8");
-        const chunks = chunkTextByLines({ relPath, text: raw, maxChars: 1200 });
+      const raw = await fsp.readFile(absPath, "utf8");
+      const chunks = chunkTextByLines({ relPath, text: raw, maxChars: 1200 });
 
+      this.db.exec("BEGIN");
+      try {
         deleteChunksForFile(this.db, relPath);
-        const memScope = this.cfg.scopes.defaultMemoryScope;
+        const now = Date.now();
         for (const chunk of chunks) {
           upsertChunk(this.db, {
             id: chunk.id,
@@ -408,9 +409,24 @@ export class ZvecSqliteMemoryManager implements MemorySearchManager {
             startLine: chunk.startLine,
             endLine: chunk.endLine,
             text: chunk.text,
-            updatedAtMs: Date.now(),
+            updatedAtMs: now,
             scope: memScope,
           });
+        }
+        upsertFileState(this.db, { relPath, mtimeMs: st.mtimeMs, sizeBytes: st.size });
+        this.db.exec("COMMIT");
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {}
+        this.pluginLog?.warn(
+          `memory-zvec: sync failed [agent=${this.agentId}] file=${relPath}: ${formatErrorDiagnostic(err)}`,
+        );
+        throw err;
+      }
+
+      for (const chunk of chunks) {
+        try {
           const vec = await this.embeddings.embed(chunk.text);
           await this.zvec.store({
             id: chunk.id,
@@ -419,20 +435,79 @@ export class ZvecSqliteMemoryManager implements MemorySearchManager {
             importance: 0.5,
             category: "other",
           });
+        } catch (err) {
+          this.pluginLog?.warn(
+            `memory-zvec: zvec store failed [agent=${this.agentId}] chunk=${chunk.id}: ${formatErrorDiagnostic(err)}`,
+          );
         }
-        upsertFileState(this.db, { relPath, mtimeMs: st.mtimeMs, sizeBytes: st.size });
       }
-
-      this.db.exec("COMMIT");
-    } catch (err) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {}
-      this.pluginLog?.warn(
-        `memory-zvec: sync failed [agent=${this.agentId}]: ${formatErrorDiagnostic(err)}`,
-      );
-      throw err;
     }
+  }
+
+  async forgetLegacyVectorId(id: string): Promise<boolean> {
+    this.ensureInitialized();
+    try {
+      await this.zvec.delete(id);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  getWorkspaceDir(): string {
+    return this.workspaceDir;
+  }
+
+  async forgetById(id: string): Promise<boolean> {
+    this.ensureInitialized();
+    const deleted = deleteChunkById(this.db, id);
+    if (!deleted) {
+      return false;
+    }
+    try {
+      await this.zvec.delete(id);
+    } catch (err) {
+      this.pluginLog?.warn(
+        `memory-zvec: zvec delete failed [agent=${this.agentId}] id=${id}: ${formatErrorDiagnostic(err)}`,
+      );
+    }
+    return true;
+  }
+
+  private resolveChunkIdForSearchHit(hit: MemorySearchResult): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT id FROM memory_chunks WHERE rel_path = ? AND start_line = ? AND end_line = ? LIMIT 1`,
+      )
+      .get(hit.path, hit.startLine, hit.endLine) as { id?: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  async forgetByQuery(query: string, minScore = 0.7): Promise<{
+    action: "deleted" | "candidates" | "not_found";
+    id?: string;
+    text?: string;
+    candidates?: Array<{ id: string; text: string; score: number }>;
+  }> {
+    const results = await this.search(query, { maxResults: 5, minScore });
+    if (results.length === 0) {
+      return { action: "not_found" };
+    }
+    if (results.length === 1 && results[0]!.score > 0.9) {
+      const hit = results[0]!;
+      const id = this.resolveChunkIdForSearchHit(hit);
+      if (id) {
+        await this.forgetById(id);
+        return { action: "deleted", id, text: hit.snippet };
+      }
+    }
+    const candidates = results
+      .map((r) => {
+        const id = this.resolveChunkIdForSearchHit(r);
+        return id ? { id, text: r.snippet, score: r.score } : null;
+      })
+      .filter((c): c is { id: string; text: string; score: number } => c != null);
+    return { action: "candidates", candidates };
   }
 
   async search(

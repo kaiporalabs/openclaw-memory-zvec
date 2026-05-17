@@ -139,6 +139,16 @@ export function deleteChunksForFile(db: DatabaseSync, relPath: string) {
   }
 }
 
+export function deleteChunkById(db: DatabaseSync, id: string): boolean {
+  const row = getChunkById(db, id);
+  if (!row) {
+    return false;
+  }
+  db.prepare(`DELETE FROM memory_chunks WHERE id = ?`).run(id);
+  db.prepare(`DELETE FROM memory_chunks_fts WHERE id = ?`).run(id);
+  return true;
+}
+
 export function upsertChunk(db: DatabaseSync, chunk: ChunkRow) {
   const scope = chunk.scope ?? "global";
   db.prepare(

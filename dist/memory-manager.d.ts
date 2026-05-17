@@ -56,6 +56,20 @@ export declare class ZvecSqliteMemoryManager implements MemorySearchManager {
         reason?: string;
         force?: boolean;
     }): Promise<void>;
+    forgetLegacyVectorId(id: string): Promise<boolean>;
+    getWorkspaceDir(): string;
+    forgetById(id: string): Promise<boolean>;
+    private resolveChunkIdForSearchHit;
+    forgetByQuery(query: string, minScore?: number): Promise<{
+        action: "deleted" | "candidates" | "not_found";
+        id?: string;
+        text?: string;
+        candidates?: Array<{
+            id: string;
+            text: string;
+            score: number;
+        }>;
+    }>;
     search(query: string, opts?: {
         maxResults?: number;
         minScore?: number;

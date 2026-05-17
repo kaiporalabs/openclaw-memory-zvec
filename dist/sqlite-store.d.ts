@@ -38,6 +38,7 @@ export declare function fileState(db: DatabaseSync, relPath: string): {
     sizeBytes: number;
 } | null;
 export declare function deleteChunksForFile(db: DatabaseSync, relPath: string): void;
+export declare function deleteChunkById(db: DatabaseSync, id: string): boolean;
 export declare function upsertChunk(db: DatabaseSync, chunk: ChunkRow): void;
 export declare function getChunkById(db: DatabaseSync, id: string): ChunkRow | null;
 export type FtsHitRow = ChunkSnippetRow & {

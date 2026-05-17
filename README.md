@@ -8,7 +8,8 @@ Long-term **memory plugin** for [OpenClaw](https://github.com/openclaw/openclaw)
 ## Features
 
 - **Tools:** `memory_recall`, `memory_store`, `memory_forget` (memory slot contract).
-- **OpenClaw slot parity:** provides `memory_search` + `memory_get`, and registers a full memory runtime capability so `openclaw status --all` and `openclaw memory ...` work when `plugins.slots.memory = "memory-zvec"`.
+- **OpenClaw slot parity:** provides `memory_search` + `memory_get` (`path` or `relPath`), **memory flush** before compaction, **`publicArtifacts`**, and a full memory runtime so `openclaw status --all` and `openclaw memory ...` work when `plugins.slots.memory = "memory-zvec"`.
+- **Markdown-first:** `memory_store` and auto-capture append to `memory/YYYY-MM-DD.md`, then index into SQLite + Zvec (same corpus as `memory_search`).
 - **Embeddings:** any OpenClaw [memory embedding provider](https://docs.openclaw.ai/) — **Ollama**, **OpenAI**, Copilot, etc. Defaults are tuned for **Ollama** (`nomic-embed-text`, 768-d).
 - **Storage:** local directory under `~/.openclaw/memory/zvec` by default (Zvec collection + `memory-ids.json` id list for listing).
 - **CLI:** `openclaw memory-zvec list|search|stats|status|index|verify|export|import|reembed` (always under `memory-zvec`; see README for `memory` vs `memory-zvec`).
@@ -204,7 +205,7 @@ Ensure [Ollama](https://ollama.com/) is running and the embedding model is pulle
             baseUrl: "http://127.0.0.1:11434/v1",
           },
           autoRecall: true,
-          autoCapture: false,
+          autoCapture: true,
         },
       },
     },
@@ -258,7 +259,7 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | Key | Description |
 | --- | --- |
 | `embedding` | Provider/model/baseUrl/apiKey/dimensions (see `openclaw.plugin.json` / manifest). |
-| `dbPath` | Data root (default `~/.openclaw/memory/zvec`). Holds the Zvec collection directory and `memory-ids.json`. **Do not set `dbPath` to `""` or whitespace** — that used to yield “dbPath resolved to empty path”; empty values are now treated as “use default”. Prefer omitting the key entirely. |
+| `dbPath` | Data root (default `~/.openclaw/memory/zvec`). Holds the Zvec collection directory and `memory-ids.json`. **Do not set `dbPath` to `""` or whitespace** — empty values are treated as “use default”. Prefer omitting the key entirely. |
 | `sqlitePath` | Optional explicit SQLite path for chunk metadata + FTS. Defaults to `~/.openclaw/memory/<agentId>.sqlite`. **Empty or whitespace-only values are ignored** (defaults apply); do not set `"sqlitePath": ""` unless you intend the default. |
 | `autoRecall` | Inject top memories before the model runs (default `true`). |
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
@@ -271,7 +272,6 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | --- | --- |
 | **`memory-zvec: dbPath resolved to empty path`** (older builds) | Remove **`dbPath: ""`** from config, or set a real path / `~/.openclaw/memory/zvec`. Current versions treat empty `dbPath` / `sqlitePath` as “use default” and fall back if `resolvePath` returns empty. |
 | **`memory-zvec: dbPath missing after config resolve`** | Corrupt or missing merged config; ensure `plugins.entries["memory-zvec"].config` parses and includes valid `embedding`. |
-
 ## CLI
 
 Plugin-local commands (always registered under **`memory-zvec`**, no clash with bundled extensions):
