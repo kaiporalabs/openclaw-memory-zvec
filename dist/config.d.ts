@@ -73,7 +73,7 @@ export declare const DEFAULT_ADAPTIVE: ResolvedAdaptiveConfig;
 export declare const DEFAULT_DECAY: ResolvedDecayConfig;
 export declare const DEFAULT_SCOPES: ResolvedScopesConfig;
 export declare const DEFAULT_SMART_EXTRACTION: ResolvedSmartExtractionConfig;
-export declare function resolveDefaultDbPath(): string;
+export declare function resolveDefaultDbPath(agentId?: string): string;
 export declare function resolveDefaultSqlitePath(agentId: string): string;
 export declare function vectorDimsForModel(model: string): number;
 export declare const memoryConfigSchema: {

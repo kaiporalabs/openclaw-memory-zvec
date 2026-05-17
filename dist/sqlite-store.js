@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync as SqliteDatabaseSync } from "node:sqlite";
+import { buildFtsMatchQuery } from "./fts-query.js";
 function nowMs() {
     return Date.now();
 }
@@ -143,6 +144,10 @@ export function getChunkById(db, id) {
     };
 }
 export function searchFts(db, params) {
+    const ftsQuery = buildFtsMatchQuery(params.query);
+    if (!ftsQuery) {
+        return [];
+    }
     const scopes = params.scopes?.filter((s) => s.length > 0) ?? [];
     const scopeClause = scopes.length > 0 ? `AND c.scope IN (${scopes.map(() => "?").join(", ")})` : "";
     // `bm25()` lower is better; normalized later in retrieval pipeline.
@@ -161,7 +166,7 @@ export function searchFts(db, params) {
        ORDER BY bm25 ASC
        LIMIT ?;
       `)
-        .all(...(scopes.length > 0 ? [params.query, ...scopes, params.limit] : [params.query, params.limit]));
+        .all(...(scopes.length > 0 ? [ftsQuery, ...scopes, params.limit] : [ftsQuery, params.limit]));
     return rows.map((r) => ({
         id: r.id,
         relPath: r.relPath,

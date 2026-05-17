@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { DatabaseSync as SqliteDatabaseSync } from "node:sqlite";
+import { buildFtsMatchQuery } from "./fts-query.js";
 
 export type ChunkRow = {
   id: string;
@@ -211,6 +212,11 @@ export function searchFts(
   db: DatabaseSync,
   params: { query: string; limit: number; scopes?: string[] },
 ): FtsHitRow[] {
+  const ftsQuery = buildFtsMatchQuery(params.query);
+  if (!ftsQuery) {
+    return [];
+  }
+
   const scopes = params.scopes?.filter((s) => s.length > 0) ?? [];
   const scopeClause =
     scopes.length > 0 ? `AND c.scope IN (${scopes.map(() => "?").join(", ")})` : "";
@@ -232,7 +238,7 @@ export function searchFts(
        LIMIT ?;
       `,
     )
-    .all(...(scopes.length > 0 ? [params.query, ...scopes, params.limit] : [params.query, params.limit])) as Array<{
+    .all(...(scopes.length > 0 ? [ftsQuery, ...scopes, params.limit] : [ftsQuery, params.limit])) as Array<{
     id: string;
     relPath: string;
     startLine: number;

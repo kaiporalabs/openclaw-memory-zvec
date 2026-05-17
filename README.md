@@ -259,9 +259,10 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | Key | Description |
 | --- | --- |
 | `embedding` | Provider/model/baseUrl/apiKey/dimensions (see `openclaw.plugin.json` / manifest). |
-| `dbPath` | Data root (default `~/.openclaw/memory/zvec`). Holds the Zvec collection directory and `memory-ids.json`. **Do not set `dbPath` to `""` or whitespace** — empty values are treated as “use default”. Prefer omitting the key entirely. |
+| `dbPath` | Data root. Default per agent: `~/.openclaw/memory/zvec/<agentId>`. Set explicitly to share one Zvec directory across agents (e.g. `~/.openclaw/memory/zvec`). **Do not set `dbPath` to `""` or whitespace**. |
 | `sqlitePath` | Optional explicit SQLite path for chunk metadata + FTS. Defaults to `~/.openclaw/memory/<agentId>.sqlite`. **Empty or whitespace-only values are ignored** (defaults apply); do not set `"sqlitePath": ""` unless you intend the default. |
-| `autoRecall` | Inject top memories before the model runs (default `true`). |
+| `autoRecall` | Inject top memories before the model runs (default `true`). Uses indexed corpus from the last manager open/tool sync — not a full reindex every message. |
+| `autoRecallTimeoutMs` | Max time for auto-recall search (default `15000`). Increase if embedding API is slow. |
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
 | `captureMaxChars` / `recallMaxChars` | Length limits for capture and recall query text. |
 | `dreaming` | Reserved for OpenClaw dreaming integration when this plugin owns the memory slot. |
@@ -272,6 +273,8 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | --- | --- |
 | **`memory-zvec: dbPath resolved to empty path`** (older builds) | Remove **`dbPath: ""`** from config, or set a real path / `~/.openclaw/memory/zvec`. Current versions treat empty `dbPath` / `sqlitePath` as “use default” and fall back if `resolvePath` returns empty. |
 | **`memory-zvec: dbPath missing after config resolve`** | Corrupt or missing merged config; ensure `plugins.entries["memory-zvec"].config` parses and includes valid `embedding`. |
+| **After upgrade to 2.0.1+, empty search for old data** | Default Zvec path moved to `~/.openclaw/memory/zvec/<agentId>`. Either set `config.dbPath` to your old `~/.openclaw/memory/zvec` or move/copy the collection into the per-agent folder and run `memory-zvec index`. |
+
 ## CLI
 
 Plugin-local commands (always registered under **`memory-zvec`**, no clash with bundled extensions):

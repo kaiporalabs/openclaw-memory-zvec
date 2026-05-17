@@ -120,11 +120,10 @@ export const DEFAULT_SMART_EXTRACTION: ResolvedSmartExtractionConfig = {
   enabled: false,
 };
 
-export function resolveDefaultDbPath(): string {
-  return join(homedir(), ".openclaw", "memory", "zvec");
+export function resolveDefaultDbPath(agentId = "main"): string {
+  const id = agentId.trim().length > 0 ? agentId.trim() : "main";
+  return join(homedir(), ".openclaw", "memory", "zvec", id);
 }
-
-const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
 export function resolveDefaultSqlitePath(agentId: string): string {
   return join(homedir(), ".openclaw", "memory", `${agentId}.sqlite`);
@@ -451,7 +450,8 @@ export const memoryConfigSchema = {
         dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
       },
       dreaming,
-      dbPath: dbPathRaw.length > 0 ? dbPathRaw : DEFAULT_DB_PATH,
+      dbPath:
+        dbPathRaw.length > 0 ? dbPathRaw : resolveDefaultDbPath(opts?.agentId ?? "main"),
       sqlitePath:
         sqlitePathRaw.length > 0
           ? sqlitePathRaw
