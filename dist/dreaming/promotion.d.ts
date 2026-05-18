@@ -5,6 +5,8 @@ export declare const MEMORY_DREAMS_STM_DIR = "memory/.dreams";
 export type DreamingPromotionCandidate = {
     chunk: ChunkRow;
     score: number;
+    recallCount?: number;
+    uniqueQueries?: number;
 };
 export declare function scoreChunkRecency(params: {
     updatedAtMs: number;
@@ -23,6 +25,7 @@ export declare function applyDreamingPromotions(params: {
     nowMs: number;
 }): Promise<{
     applied: number;
+    promotedCandidates: DreamingPromotionCandidate[];
     reportLines: string[];
 }>;
 //# sourceMappingURL=promotion.d.ts.map

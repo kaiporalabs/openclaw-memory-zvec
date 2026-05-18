@@ -10,6 +10,8 @@ export const MEMORY_DREAMS_STM_DIR = "memory/.dreams";
 export type DreamingPromotionCandidate = {
   chunk: ChunkRow;
   score: number;
+  recallCount?: number;
+  uniqueQueries?: number;
 };
 
 export function scoreChunkRecency(params: {
@@ -66,8 +68,13 @@ export function rankDreamingCandidates(params: {
   return scored.slice(0, Math.max(0, params.config.limit));
 }
 
-function formatCandidateLine(chunk: ChunkRow, score: number): string {
-  return `- [dreaming] ${chunk.relPath}:${chunk.startLine}-${chunk.endLine} (score=${score.toFixed(3)}) ${chunk.text.trim().replace(/\s+/g, " ").slice(0, 400)}`;
+function formatCandidateLine(candidate: DreamingPromotionCandidate): string {
+  const { chunk, score, recallCount, uniqueQueries } = candidate;
+  const recallMeta =
+    typeof recallCount === "number"
+      ? ` recalls=${recallCount}${typeof uniqueQueries === "number" ? ` queries=${uniqueQueries}` : ""}`
+      : "";
+  return `- [dreaming] ${chunk.relPath}:${chunk.startLine}-${chunk.endLine} (score=${score.toFixed(3)}${recallMeta}) ${chunk.text.trim().replace(/\s+/g, " ").slice(0, 400)}`;
 }
 
 async function appendDreamsDiary(params: {
@@ -127,15 +134,15 @@ export async function applyDreamingPromotions(params: {
   candidates: DreamingPromotionCandidate[];
   config: ZvecDreamingRuntimeConfig;
   nowMs: number;
-}): Promise<{ applied: number; reportLines: string[] }> {
+}): Promise<{ applied: number; promotedCandidates: DreamingPromotionCandidate[]; reportLines: string[] }> {
   const reportLines: string[] = [];
   if (params.candidates.length === 0) {
     reportLines.push("- No candidates ranked for promotion.");
-    return { applied: 0, reportLines };
+    return { applied: 0, promotedCandidates: [], reportLines };
   }
 
   const day = formatMemoryDreamingDay(params.nowMs, params.config.timezone);
-  const diaryLines = params.candidates.map(({ chunk, score }) => formatCandidateLine(chunk, score));
+  const diaryLines = params.candidates.map((candidate) => formatCandidateLine(candidate));
 
   if (params.config.storageMode === "inline" || params.config.storageMode === "both") {
     await appendDreamsDiary({
@@ -162,17 +169,20 @@ export async function applyDreamingPromotions(params: {
   }
 
   const promoted: string[] = [];
+  const promotedCandidates: DreamingPromotionCandidate[] = [];
   let applied = 0;
-  for (const { chunk, score } of params.candidates) {
+  for (const candidate of params.candidates) {
+    const { chunk, score } = candidate;
     if (score < params.config.minPromotionScore) {
       continue;
     }
-    const line = formatCandidateLine(chunk, score);
+    const line = formatCandidateLine(candidate);
     const fingerprint = chunk.text.trim().toLowerCase().slice(0, 120);
     if (fingerprint.length > 0 && memoryBody.toLowerCase().includes(fingerprint)) {
       continue;
     }
     promoted.push(line);
+    promotedCandidates.push(candidate);
     applied++;
   }
 
@@ -212,5 +222,5 @@ export async function applyDreamingPromotions(params: {
     reportLines.push(`- Wrote ${path.relative(params.workspaceDir, reportPath)}.`);
   }
 
-  return { applied, reportLines };
+  return { applied, promotedCandidates, reportLines };
 }

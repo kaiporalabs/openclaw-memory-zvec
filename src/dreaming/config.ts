@@ -14,6 +14,9 @@ export type ZvecDreamingRuntimeConfig = {
   recencyHalfLifeDays: number;
   /** Deep-phase gate: only scores at or above this value may append to MEMORY.md */
   minPromotionScore: number;
+  /** Recall-store gate: minimum recall signals before dreaming ranks a snippet */
+  minRecallCount: number;
+  minUniqueQueries: number;
   verboseLogging: boolean;
   storageMode: "inline" | "separate" | "both";
   separateReports: boolean;
@@ -34,6 +37,8 @@ export function resolveZvecDreamingRuntimeConfig(params: {
     ...(typeof deep.maxAgeDays === "number" ? { maxAgeDays: deep.maxAgeDays } : {}),
     recencyHalfLifeDays: deep.recencyHalfLifeDays,
     minPromotionScore: deep.minScore,
+    minRecallCount: deep.minRecallCount,
+    minUniqueQueries: deep.minUniqueQueries,
     verboseLogging: dreaming.verboseLogging,
     storageMode: dreaming.storage.mode,
     separateReports: dreaming.storage.separateReports,

@@ -34,6 +34,7 @@ import {
   listMemoryZvecPublicArtifacts,
 } from "./public-artifacts.js";
 import { registerMemoryZvecDreaming } from "./dreaming/register.js";
+import { recordManagerRecalls } from "./recall-store.js";
 import { createEmbeddings } from "./embeddings.js";
 import {
   memoryConfigSchema,
@@ -444,7 +445,13 @@ export default definePluginEntry({
           const { query, limit = 5 } = params as { query: string; limit?: number };
           const agentId = resolveToolAgentId(ctx);
           const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) => {
-            return manager.search(query, { maxResults: limit, minScore: 0.1 });
+            const results = await manager.search(query, { maxResults: limit, minScore: 0.1 });
+            await recordManagerRecalls({
+              workspaceDir: manager.getWorkspaceDir(),
+              query,
+              results,
+            }).catch(() => undefined);
+            return results;
           });
           if (!run.ok) {
             throw new Error(run.error);
@@ -647,12 +654,18 @@ export default definePluginEntry({
             minScore?: number;
           };
           const agentId = resolveToolAgentId(ctx);
-          const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) =>
-            manager.search(query, {
+          const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) => {
+            const results = await manager.search(query, {
               ...(typeof maxResults === "number" ? { maxResults } : {}),
               ...(typeof minScore === "number" ? { minScore } : {}),
-            }),
-          );
+            });
+            await recordManagerRecalls({
+              workspaceDir: manager.getWorkspaceDir(),
+              query,
+              results,
+            }).catch(() => undefined);
+            return results;
+          });
           if (!run.ok) {
             throw new Error(run.error);
           }
@@ -1197,9 +1210,15 @@ export default definePluginEntry({
         const recall = await runWithTimeout({
           timeoutMs: recallTimeoutMs,
           task: async () => {
-            const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) =>
-              manager.search(recallQuery, { maxResults: 3, minScore: 0.3 }),
-            );
+            const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) => {
+              const results = await manager.search(recallQuery, { maxResults: 3, minScore: 0.3 });
+              await recordManagerRecalls({
+                workspaceDir: manager.getWorkspaceDir(),
+                query: recallQuery,
+                results,
+              }).catch(() => undefined);
+              return results;
+            });
             if (!run.ok) {
               throw new Error(run.error);
             }

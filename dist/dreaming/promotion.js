@@ -41,8 +41,12 @@ export function rankDreamingCandidates(params) {
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, Math.max(0, params.config.limit));
 }
-function formatCandidateLine(chunk, score) {
-    return `- [dreaming] ${chunk.relPath}:${chunk.startLine}-${chunk.endLine} (score=${score.toFixed(3)}) ${chunk.text.trim().replace(/\s+/g, " ").slice(0, 400)}`;
+function formatCandidateLine(candidate) {
+    const { chunk, score, recallCount, uniqueQueries } = candidate;
+    const recallMeta = typeof recallCount === "number"
+        ? ` recalls=${recallCount}${typeof uniqueQueries === "number" ? ` queries=${uniqueQueries}` : ""}`
+        : "";
+    return `- [dreaming] ${chunk.relPath}:${chunk.startLine}-${chunk.endLine} (score=${score.toFixed(3)}${recallMeta}) ${chunk.text.trim().replace(/\s+/g, " ").slice(0, 400)}`;
 }
 async function appendDreamsDiary(params) {
     if (params.lines.length === 0) {
@@ -83,10 +87,10 @@ export async function applyDreamingPromotions(params) {
     const reportLines = [];
     if (params.candidates.length === 0) {
         reportLines.push("- No candidates ranked for promotion.");
-        return { applied: 0, reportLines };
+        return { applied: 0, promotedCandidates: [], reportLines };
     }
     const day = formatMemoryDreamingDay(params.nowMs, params.config.timezone);
-    const diaryLines = params.candidates.map(({ chunk, score }) => formatCandidateLine(chunk, score));
+    const diaryLines = params.candidates.map((candidate) => formatCandidateLine(candidate));
     if (params.config.storageMode === "inline" || params.config.storageMode === "both") {
         await appendDreamsDiary({
             workspaceDir: params.workspaceDir,
@@ -110,17 +114,20 @@ export async function applyDreamingPromotions(params) {
         // MEMORY.md may not exist yet
     }
     const promoted = [];
+    const promotedCandidates = [];
     let applied = 0;
-    for (const { chunk, score } of params.candidates) {
+    for (const candidate of params.candidates) {
+        const { chunk, score } = candidate;
         if (score < params.config.minPromotionScore) {
             continue;
         }
-        const line = formatCandidateLine(chunk, score);
+        const line = formatCandidateLine(candidate);
         const fingerprint = chunk.text.trim().toLowerCase().slice(0, 120);
         if (fingerprint.length > 0 && memoryBody.toLowerCase().includes(fingerprint)) {
             continue;
         }
         promoted.push(line);
+        promotedCandidates.push(candidate);
         applied++;
     }
     if (promoted.length > 0) {
@@ -151,6 +158,6 @@ export async function applyDreamingPromotions(params) {
         await fsp.writeFile(reportPath, reportBody, "utf8");
         reportLines.push(`- Wrote ${path.relative(params.workspaceDir, reportPath)}.`);
     }
-    return { applied, reportLines };
+    return { applied, promotedCandidates, reportLines };
 }
 //# sourceMappingURL=promotion.js.map

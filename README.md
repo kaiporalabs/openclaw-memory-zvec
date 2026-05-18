@@ -96,6 +96,8 @@ Example fragment:
 
 **`smartExtraction`:** when `enabled: true`, auto-capture and `memory_store` normalize long lines (trim role prefixes, cap length). This is a lightweight pass — not the full LLM extraction pipeline from memory-core.
 
+**Recall store:** auto-recall, `memory_search`, and `memory_recall` append hits from `memory/YYYY-MM-DD*.md` into `memory/.dreams/short-term-recall.json` (memory-core compatible). Dreaming uses recall frequency and query diversity before promoting to `MEMORY.md`.
+
 ## Diagnostics & logging
 
 Messages go through OpenClaw’s **`api.logger`** (`info`, `warn`, `error`, optional `debug`). Whether **`debug`** lines appear depends on the gateway/host log level.
@@ -266,7 +268,7 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | `autoRecallTimeoutMs` | Max time for auto-recall search (default `15000`). Increase if embedding API is slow. |
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
 | `captureMaxChars` / `recallMaxChars` | Length limits for capture and recall query text. |
-| `dreaming` | Nightly cron sweep: diary in `DREAMS.md`, short-term staging in `memory/.dreams/`, qualified excerpts to `MEMORY.md` (score ≥ deep `minScore`), optional `memory/dreaming/report-*.md`. Uses OpenClaw cron (same pattern as memory-core). |
+| `dreaming` | Nightly cron sweep: diary in `DREAMS.md`, short-term staging in `memory/.dreams/`, qualified excerpts to `MEMORY.md` (score ≥ deep `minScore`). Promotion candidates come from **`memory/.dreams/short-term-recall.json`** when `minRecallCount` / `minUniqueQueries` gates pass (same file as memory-core); otherwise recency fallback. Optional `memory/dreaming/report-*.md`. |
 | `smartExtraction` | Lightweight capture normalization when `enabled: true` (no LLM pass). |
 
 **Index maintenance:** each `sync`/`index` prunes orphaned files from SQLite + Zvec, reconciles missing vectors, and sets `status.dirty` while indexing. `memory_get` uses the workspace file when present, otherwise indexed chunks.

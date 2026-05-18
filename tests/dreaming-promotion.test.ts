@@ -74,6 +74,8 @@ describe("applyDreamingPromotions", () => {
     limit: 5,
     recencyHalfLifeDays: 14,
     minPromotionScore: 0.5,
+    minRecallCount: 3,
+    minUniqueQueries: 2,
     verboseLogging: false,
     storageMode: "both",
     separateReports: true,

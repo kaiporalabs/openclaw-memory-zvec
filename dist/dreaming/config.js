@@ -11,6 +11,8 @@ export function resolveZvecDreamingRuntimeConfig(params) {
         ...(typeof deep.maxAgeDays === "number" ? { maxAgeDays: deep.maxAgeDays } : {}),
         recencyHalfLifeDays: deep.recencyHalfLifeDays,
         minPromotionScore: deep.minScore,
+        minRecallCount: deep.minRecallCount,
+        minUniqueQueries: deep.minUniqueQueries,
         verboseLogging: dreaming.verboseLogging,
         storageMode: dreaming.storage.mode,
         separateReports: dreaming.storage.separateReports,

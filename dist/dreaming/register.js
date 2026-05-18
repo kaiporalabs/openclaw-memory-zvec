@@ -3,6 +3,7 @@ import { formatErrorDiagnostic } from "../error-diagnostic.js";
 import { hasPendingManagedZvecDreamingCronEvent, reconcileZvecDreamingCronJob, resolveCronServiceFromGatewayContext, } from "./cron.js";
 import { resolveZvecDreamingRuntimeConfig } from "./config.js";
 import { MEMORY_ZVEC_DREAMING_SYSTEM_EVENT_TEXT } from "./constants.js";
+import { markRecallEntriesPromoted, rankRecallPromotionCandidates, } from "../recall-store.js";
 import { applyDreamingPromotions, rankDreamingCandidates } from "./promotion.js";
 import { includesSystemEventToken } from "./shared.js";
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
@@ -40,21 +41,48 @@ async function runZvecDreamingPromotion(params) {
                 await manager.close?.().catch(() => undefined);
             }
         }
-        const candidates = rankDreamingCandidates({
-            chunks: dedupeChunks(collected),
+        const chunks = dedupeChunks(collected);
+        const recallCandidates = await rankRecallPromotionCandidates({
+            workspaceDir: entry.workspaceDir,
+            chunks,
+            config: {
+                limit: params.config.limit,
+                minScore: params.config.minPromotionScore,
+                minRecallCount: params.config.minRecallCount,
+                minUniqueQueries: params.config.minUniqueQueries,
+                recencyHalfLifeDays: params.config.recencyHalfLifeDays,
+                ...(typeof params.config.maxAgeDays === "number"
+                    ? { maxAgeDays: params.config.maxAgeDays }
+                    : {}),
+                ...(params.config.timezone ? { timezone: params.config.timezone } : {}),
+            },
             nowMs,
-            config: params.config,
         });
+        const candidates = recallCandidates.length > 0
+            ? recallCandidates
+            : rankDreamingCandidates({
+                chunks,
+                nowMs,
+                config: params.config,
+            });
         if (params.config.verboseLogging) {
-            params.logger.info(`memory-zvec: dreaming ranked ${candidates.length} candidate(s) [workspace=${entry.workspaceDir}]`);
+            const mode = recallCandidates.length > 0 ? "recall-store" : "recency-fallback";
+            params.logger.info(`memory-zvec: dreaming ranked ${candidates.length} candidate(s) [workspace=${entry.workspaceDir}] mode=${mode}`);
         }
-        const { applied, reportLines } = await applyDreamingPromotions({
+        const { applied, promotedCandidates, reportLines } = await applyDreamingPromotions({
             workspaceDir: entry.workspaceDir,
             candidates,
             config: params.config,
             nowMs,
         });
         totalApplied += applied;
+        if (promotedCandidates.length > 0) {
+            await markRecallEntriesPromoted({
+                workspaceDir: entry.workspaceDir,
+                candidates: promotedCandidates,
+                nowMs,
+            });
+        }
         if (candidates.length > 0) {
             for (const agentId of entry.agentIds) {
                 const { manager, error } = await params.memoryRuntime.getMemorySearchManager({

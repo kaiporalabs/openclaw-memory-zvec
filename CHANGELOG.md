@@ -5,6 +5,14 @@ All notable changes to `@kaiporalabs/openclaw-memory-zvec` are documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-05-18
+
+### Added
+
+- **Recall store** (`memory/.dreams/short-term-recall.json`, memory-core compatible): records hits from auto-recall, `memory_search`, and `memory_recall`.
+- **Dreaming** ranks promotion candidates from the recall store when gates pass (`minRecallCount`, `minUniqueQueries` from OpenClaw deep dreaming config); falls back to recency ranking when the store is empty.
+- Promoted snippets are marked `promotedAt` in the recall store to avoid duplicate MEMORY.md promotion.
+
 ## [2.4.0] - 2026-05-18
 
 ### Added
