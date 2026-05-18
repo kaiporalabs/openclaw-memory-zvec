@@ -1,6 +1,6 @@
 {
   "name": "@kaiporalabs/openclaw-memory-zvec",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "OpenClaw long-term memory plugin backed by Alibaba Zvec (dense vector ANN)",
   "type": "module",
   "main": "./dist/index.js",

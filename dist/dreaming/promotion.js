@@ -1,10 +1,17 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+export const MEMORY_DREAMS_REL_PATH = "DREAMS.md";
+export const MEMORY_DREAMS_STM_DIR = "memory/.dreams";
 export function scoreChunkRecency(params) {
     const ageMs = Math.max(0, params.nowMs - params.updatedAtMs);
     const halfLifeMs = Math.max(1, params.halfLifeDays) * 86_400_000;
     return Math.pow(0.5, ageMs / halfLifeMs);
+}
+function isDreamingInternalPath(relPath) {
+    return (relPath.startsWith("memory/dreaming/") ||
+        relPath.startsWith(`${MEMORY_DREAMS_STM_DIR}/`) ||
+        relPath === MEMORY_DREAMS_REL_PATH);
 }
 export function rankDreamingCandidates(params) {
     const maxAgeMs = typeof params.config.maxAgeDays === "number"
@@ -12,7 +19,7 @@ export function rankDreamingCandidates(params) {
         : undefined;
     const scored = [];
     for (const chunk of params.chunks) {
-        if (!chunk.relPath.startsWith("memory/") || chunk.relPath.startsWith("memory/dreaming/")) {
+        if (!chunk.relPath.startsWith("memory/") || isDreamingInternalPath(chunk.relPath)) {
             continue;
         }
         if (maxAgeMs !== undefined && params.nowMs - chunk.updatedAtMs > maxAgeMs) {
@@ -34,12 +41,66 @@ export function rankDreamingCandidates(params) {
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, Math.max(0, params.config.limit));
 }
+function formatCandidateLine(chunk, score) {
+    return `- [dreaming] ${chunk.relPath}:${chunk.startLine}-${chunk.endLine} (score=${score.toFixed(3)}) ${chunk.text.trim().replace(/\s+/g, " ").slice(0, 400)}`;
+}
+async function appendDreamsDiary(params) {
+    if (params.lines.length === 0) {
+        return;
+    }
+    const dreamsPath = path.join(params.workspaceDir, MEMORY_DREAMS_REL_PATH);
+    let body = "";
+    try {
+        body = await fsp.readFile(dreamsPath, "utf8");
+    }
+    catch {
+        body = "# Dreams\n\n";
+    }
+    const header = `\n\n## Dream sweep ${params.day}\n`;
+    const block = `${body.length > 0 && !body.endsWith("\n") ? "\n" : ""}${header}${params.lines.join("\n")}\n`;
+    await fsp.writeFile(dreamsPath, body + block, "utf8");
+}
+async function stageShortTermDreams(params) {
+    const stmDir = path.join(params.workspaceDir, MEMORY_DREAMS_STM_DIR);
+    await fsp.mkdir(stmDir, { recursive: true });
+    let staged = 0;
+    for (const { chunk, score } of params.candidates) {
+        const filePath = path.join(stmDir, `${chunk.id}.json`);
+        await fsp.writeFile(filePath, `${JSON.stringify({
+            id: chunk.id,
+            relPath: chunk.relPath,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            score,
+            text: chunk.text,
+            stagedAtMs: params.nowMs,
+        }, null, 2)}\n`, "utf8");
+        staged++;
+    }
+    return staged;
+}
 export async function applyDreamingPromotions(params) {
     const reportLines = [];
     if (params.candidates.length === 0) {
         reportLines.push("- No candidates ranked for promotion.");
         return { applied: 0, reportLines };
     }
+    const day = formatMemoryDreamingDay(params.nowMs, params.config.timezone);
+    const diaryLines = params.candidates.map(({ chunk, score }) => formatCandidateLine(chunk, score));
+    if (params.config.storageMode === "inline" || params.config.storageMode === "both") {
+        await appendDreamsDiary({
+            workspaceDir: params.workspaceDir,
+            day,
+            lines: diaryLines,
+        });
+        reportLines.push(`- Wrote dream sweep diary to ${MEMORY_DREAMS_REL_PATH}.`);
+    }
+    const staged = await stageShortTermDreams({
+        workspaceDir: params.workspaceDir,
+        candidates: params.candidates,
+        nowMs: params.nowMs,
+    });
+    reportLines.push(`- Staged ${staged} candidate(s) under ${MEMORY_DREAMS_STM_DIR}/.`);
     const memoryMdPath = path.join(params.workspaceDir, "MEMORY.md");
     let memoryBody = "";
     try {
@@ -51,7 +112,10 @@ export async function applyDreamingPromotions(params) {
     const promoted = [];
     let applied = 0;
     for (const { chunk, score } of params.candidates) {
-        const line = `- [dreaming] ${chunk.relPath}:${chunk.startLine}-${chunk.endLine} (score=${score.toFixed(3)}) ${chunk.text.trim().replace(/\s+/g, " ").slice(0, 400)}`;
+        if (score < params.config.minPromotionScore) {
+            continue;
+        }
+        const line = formatCandidateLine(chunk, score);
         const fingerprint = chunk.text.trim().toLowerCase().slice(0, 120);
         if (fingerprint.length > 0 && memoryBody.toLowerCase().includes(fingerprint)) {
             continue;
@@ -60,15 +124,14 @@ export async function applyDreamingPromotions(params) {
         applied++;
     }
     if (promoted.length > 0) {
-        const header = `\n\n## Dreaming promotion (${formatMemoryDreamingDay(params.nowMs, params.config.timezone)})\n`;
+        const header = `\n\n## Dreaming promotion (${day})\n`;
         const block = `${memoryBody.length > 0 && !memoryBody.endsWith("\n") ? "\n" : ""}${header}${promoted.join("\n")}\n`;
         await fsp.writeFile(memoryMdPath, memoryBody + block, "utf8");
-        reportLines.push(`- Promoted ${applied} excerpt(s) into MEMORY.md.`);
+        reportLines.push(`- Promoted ${applied} excerpt(s) into MEMORY.md (score >= ${params.config.minPromotionScore.toFixed(3)}).`);
     }
     else {
-        reportLines.push("- Candidates found but all were already present in MEMORY.md.");
+        reportLines.push(`- No MEMORY.md promotion (none met score >= ${params.config.minPromotionScore.toFixed(3)} or all duplicates).`);
     }
-    const day = formatMemoryDreamingDay(params.nowMs, params.config.timezone);
     if (params.config.storageMode === "separate" || params.config.storageMode === "both") {
         const dreamingDir = path.join(params.workspaceDir, "memory", "dreaming");
         await fsp.mkdir(dreamingDir, { recursive: true });

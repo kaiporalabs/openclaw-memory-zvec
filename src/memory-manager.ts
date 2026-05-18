@@ -66,9 +66,13 @@ type IndexChunk = {
 };
 
 function looksIndexableFile(relPath: string): boolean {
-  const lower = relPath.toLowerCase();
+  const normalized = relPath.replace(/\\/g, "/");
+  if (normalized.startsWith("memory/.dreams/")) {
+    return false;
+  }
+  const lower = normalized.toLowerCase();
   if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".markdown")) return true;
-  return relPath === "MEMORY.md" || relPath === "USER.md" || relPath === "IDENTITY.md";
+  return normalized === "MEMORY.md" || normalized === "USER.md" || normalized === "IDENTITY.md" || normalized === "DREAMS.md";
 }
 
 async function listMemoryRoots(workspaceDir: string): Promise<string[]> {

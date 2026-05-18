@@ -55,6 +55,28 @@ async function runZvecDreamingPromotion(params) {
             nowMs,
         });
         totalApplied += applied;
+        if (candidates.length > 0) {
+            for (const agentId of entry.agentIds) {
+                const { manager, error } = await params.memoryRuntime.getMemorySearchManager({
+                    cfg: params.cfg,
+                    agentId,
+                    purpose: "cli",
+                });
+                if (!manager) {
+                    params.logger.warn(`memory-zvec: dreaming post-promotion sync skipped agent ${agentId}: ${error ?? "manager unavailable"}`);
+                    continue;
+                }
+                try {
+                    await manager.sync?.({
+                        reason: "dreaming-post-promotion",
+                        force: false,
+                    });
+                }
+                finally {
+                    await manager.close?.().catch(() => undefined);
+                }
+            }
+        }
         params.logger.info(`memory-zvec: dreaming workspace complete [workspace=${entry.workspaceDir}] ${reportLines.join(" ")}`);
     }
     return { applied: totalApplied, workspaces: workspaces.length };

@@ -18,10 +18,14 @@ import { rerankWithJinaCompatible } from "./rerank-api.js";
 import { isScopeAllowed, resolveAllowedScopes } from "./scopes.js";
 import { computeChunkId, deleteChunkById, deleteChunksForFile, deleteFileIndex, fileState, getChunkById, getIndexedChunksForLineRange, initMemorySchema, listAllChunks, listIndexedRelPaths, openMemorySqlite, searchFts, stats as sqliteStats, upsertChunk, upsertFileState, } from "./sqlite-store.js";
 function looksIndexableFile(relPath) {
-    const lower = relPath.toLowerCase();
+    const normalized = relPath.replace(/\\/g, "/");
+    if (normalized.startsWith("memory/.dreams/")) {
+        return false;
+    }
+    const lower = normalized.toLowerCase();
     if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".markdown"))
         return true;
-    return relPath === "MEMORY.md" || relPath === "USER.md" || relPath === "IDENTITY.md";
+    return normalized === "MEMORY.md" || normalized === "USER.md" || normalized === "IDENTITY.md" || normalized === "DREAMS.md";
 }
 async function listMemoryRoots(workspaceDir) {
     const roots = ["MEMORY.md", "USER.md", "IDENTITY.md", "memory"];

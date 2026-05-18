@@ -1,5 +1,7 @@
 import type { ChunkRow } from "../sqlite-store.js";
 import type { ZvecDreamingRuntimeConfig } from "./config.js";
+export declare const MEMORY_DREAMS_REL_PATH = "DREAMS.md";
+export declare const MEMORY_DREAMS_STM_DIR = "memory/.dreams";
 export type DreamingPromotionCandidate = {
     chunk: ChunkRow;
     score: number;

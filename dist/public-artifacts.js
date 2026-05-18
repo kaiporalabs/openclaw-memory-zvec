@@ -57,7 +57,7 @@ async function collectWorkspaceArtifacts(params) {
     const workspaceEntries = new Set((await fs.readdir(params.workspaceDir, { withFileTypes: true }).catch(() => []))
         .filter((entry) => entry.isFile())
         .map((entry) => entry.name));
-    for (const relativePath of ["MEMORY.md", "USER.md", "IDENTITY.md"]) {
+    for (const relativePath of ["MEMORY.md", "DREAMS.md", "USER.md", "IDENTITY.md"]) {
         if (!workspaceEntries.has(relativePath)) {
             continue;
         }
