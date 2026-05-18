@@ -38,6 +38,15 @@ export declare function fileState(db: DatabaseSync, relPath: string): {
     sizeBytes: number;
 } | null;
 export declare function deleteChunksForFile(db: DatabaseSync, relPath: string): void;
+/** Remove SQLite + FTS rows for a file and drop its file-state row. Returns removed chunk ids. */
+export declare function deleteFileIndex(db: DatabaseSync, relPath: string): string[];
+export declare function listIndexedRelPaths(db: DatabaseSync): string[];
+/** Chunks overlapping a 1-based line window (for memory_get when the file is missing on disk). */
+export declare function getIndexedChunksForLineRange(db: DatabaseSync, params: {
+    relPath: string;
+    from: number;
+    lines: number;
+}): ChunkRow[];
 export declare function deleteChunkById(db: DatabaseSync, id: string): boolean;
 export declare function upsertChunk(db: DatabaseSync, chunk: ChunkRow): void;
 export declare function getChunkById(db: DatabaseSync, id: string): ChunkRow | null;

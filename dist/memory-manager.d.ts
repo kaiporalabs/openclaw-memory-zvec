@@ -37,6 +37,7 @@ export declare class ZvecSqliteMemoryManager implements MemorySearchManager {
     private readonly pluginLog?;
     private db;
     private initialized;
+    private indexDirty;
     private lastEmbedProbe;
     private statusSelfTest;
     constructor(cfg: MemoryConfig, workspaceDir: string, agentId: string, embeddings: Embeddings, zvec: MemoryZvecStore, pluginLog?: PluginLogger | undefined);
@@ -52,10 +53,14 @@ export declare class ZvecSqliteMemoryManager implements MemorySearchManager {
     getCachedEmbeddingAvailability(): MemoryEmbeddingProbeResult | null;
     probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
     close(): Promise<void>;
+    private embedChunkIntoZvec;
+    private pruneOrphanIndexedFiles;
+    private reconcileZvecWithSqlite;
     sync(params?: {
         reason?: string;
         force?: boolean;
     }): Promise<void>;
+    private runSyncBody;
     forgetLegacyVectorId(id: string): Promise<boolean>;
     getWorkspaceDir(): string;
     forgetById(id: string): Promise<boolean>;

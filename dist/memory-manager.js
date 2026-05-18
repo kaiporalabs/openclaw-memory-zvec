@@ -16,7 +16,7 @@ import { shouldSkipAdaptiveRecall } from "./adaptive-retrieval.js";
 import { applyTimeDecay, bm25BatchToScores, fuseHybridScores, maximalMarginalRelevance, } from "./retrieval-pipeline.js";
 import { rerankWithJinaCompatible } from "./rerank-api.js";
 import { isScopeAllowed, resolveAllowedScopes } from "./scopes.js";
-import { computeChunkId, deleteChunkById, deleteChunksForFile, fileState, getChunkById, initMemorySchema, listAllChunks, openMemorySqlite, searchFts, stats as sqliteStats, upsertChunk, upsertFileState, } from "./sqlite-store.js";
+import { computeChunkId, deleteChunkById, deleteChunksForFile, deleteFileIndex, fileState, getChunkById, getIndexedChunksForLineRange, initMemorySchema, listAllChunks, listIndexedRelPaths, openMemorySqlite, searchFts, stats as sqliteStats, upsertChunk, upsertFileState, } from "./sqlite-store.js";
 function looksIndexableFile(relPath) {
     const lower = relPath.toLowerCase();
     if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".markdown"))
@@ -131,6 +131,7 @@ export class ZvecSqliteMemoryManager {
     pluginLog;
     db;
     initialized = false;
+    indexDirty = false;
     lastEmbedProbe = null;
     statusSelfTest = null;
     constructor(cfg, workspaceDir, agentId, embeddings, zvec, pluginLog) {
@@ -170,7 +171,7 @@ export class ZvecSqliteMemoryManager {
             model: this.cfg.embedding.model,
             files: st.files,
             chunks: st.chunks,
-            dirty: st.dirty,
+            dirty: this.indexDirty,
             workspaceDir: this.workspaceDir,
             dbPath: this.cfg.sqlitePath,
             sources: ["memory"],
@@ -187,6 +188,10 @@ export class ZvecSqliteMemoryManager {
             },
             custom: {
                 zvecDataRoot: this.cfg.dbPath,
+                sqliteChunks: st.chunks,
+                ...(selfTest?.zvecCollection.docCount !== undefined
+                    ? { zvecDocCount: selfTest.zvecCollection.docCount }
+                    : {}),
                 ...(selfTest ? { memoryZvecStatusSelfTest: selfTest } : {}),
                 ...(!selfTest ? { embeddingEndpointSummary: describeEmbeddingEndpoint(this.cfg.embedding) } : {}),
             },
@@ -311,10 +316,99 @@ export class ZvecSqliteMemoryManager {
         catch { }
         await this.zvec.close();
     }
+    async embedChunkIntoZvec(chunk) {
+        try {
+            const vec = await this.embeddings.embed(chunk.text);
+            await this.zvec.store({
+                id: chunk.id,
+                text: chunk.text,
+                vector: vec,
+                importance: 0.5,
+                category: "other",
+            });
+            return true;
+        }
+        catch (err) {
+            this.pluginLog?.warn(`memory-zvec: zvec store failed [agent=${this.agentId}] chunk=${chunk.id}: ${formatErrorDiagnostic(err)}`);
+            return false;
+        }
+    }
+    async pruneOrphanIndexedFiles(crawled) {
+        let pruned = 0;
+        for (const relPath of listIndexedRelPaths(this.db)) {
+            if (crawled.has(relPath)) {
+                continue;
+            }
+            const removedIds = deleteFileIndex(this.db, relPath);
+            for (const id of removedIds) {
+                try {
+                    await this.zvec.delete(id);
+                }
+                catch (err) {
+                    this.pluginLog?.warn(`memory-zvec: zvec delete failed [agent=${this.agentId}] orphan id=${id}: ${formatErrorDiagnostic(err)}`);
+                }
+            }
+            pruned++;
+        }
+        return pruned;
+    }
+    async reconcileZvecWithSqlite() {
+        const sqliteChunks = listAllChunks(this.db);
+        const sqliteIds = new Set(sqliteChunks.map((c) => c.id));
+        const zvecIds = new Set(this.zvec.listKnownIds());
+        let pruned = 0;
+        for (const id of zvecIds) {
+            if (sqliteIds.has(id)) {
+                continue;
+            }
+            try {
+                await this.zvec.delete(id);
+                pruned++;
+            }
+            catch (err) {
+                this.pluginLog?.warn(`memory-zvec: zvec delete failed [agent=${this.agentId}] stale id=${id}: ${formatErrorDiagnostic(err)}`);
+            }
+        }
+        let embedded = 0;
+        let failed = 0;
+        for (const chunk of sqliteChunks) {
+            if (zvecIds.has(chunk.id)) {
+                continue;
+            }
+            const ok = await this.embedChunkIntoZvec({
+                id: chunk.id,
+                relPath: chunk.relPath,
+                startLine: chunk.startLine,
+                endLine: chunk.endLine,
+                text: chunk.text,
+            });
+            if (ok) {
+                embedded++;
+            }
+            else {
+                failed++;
+            }
+        }
+        return { embedded, failed, pruned };
+    }
     async sync(params) {
         this.ensureInitialized();
+        this.indexDirty = true;
+        try {
+            await this.runSyncBody(params);
+            this.indexDirty = false;
+        }
+        catch (err) {
+            this.pluginLog?.warn?.(`memory-zvec: sync aborted [agent=${this.agentId}]: ${formatErrorDiagnostic(err)}`);
+            throw err;
+        }
+    }
+    async runSyncBody(params) {
         const files = await crawlFiles(this.workspaceDir);
+        const crawled = new Set(files);
         const memScope = this.cfg.scopes.defaultMemoryScope;
+        let embedFailed = 0;
+        const prunedFiles = await this.pruneOrphanIndexedFiles(crawled);
         for (const relPath of files) {
             const absPath = path.join(this.workspaceDir, relPath);
             const st = await fsp.stat(absPath);
@@ -351,21 +445,15 @@ export class ZvecSqliteMemoryManager {
                 throw err;
             }
             for (const chunk of chunks) {
-                try {
-                    const vec = await this.embeddings.embed(chunk.text);
-                    await this.zvec.store({
-                        id: chunk.id,
-                        text: chunk.text,
-                        vector: vec,
-                        importance: 0.5,
-                        category: "other",
-                    });
-                }
-                catch (err) {
-                    this.pluginLog?.warn(`memory-zvec: zvec store failed [agent=${this.agentId}] chunk=${chunk.id}: ${formatErrorDiagnostic(err)}`);
+                const ok = await this.embedChunkIntoZvec(chunk);
+                if (!ok) {
+                    embedFailed++;
                 }
             }
         }
+        const reconcile = await this.reconcileZvecWithSqlite();
+        const st = sqliteStats(this.db);
+        this.pluginLog?.info?.(`memory-zvec: sync complete [agent=${this.agentId}] reason=${params?.reason ?? "open"} files=${st.files} chunks=${st.chunks} prunedFiles=${prunedFiles} zvecEmbedded=${reconcile.embedded} zvecFailed=${embedFailed + reconcile.failed} zvecPruned=${reconcile.pruned}`);
     }
     async forgetLegacyVectorId(id) {
         this.ensureInitialized();
@@ -639,19 +727,51 @@ export class ZvecSqliteMemoryManager {
         return { imported };
     }
     async readFile(params) {
-        const abs = path.join(this.workspaceDir, params.relPath);
-        const raw = await fsp.readFile(abs, "utf8");
-        const all = raw.split(/\r?\n/);
+        this.ensureInitialized();
         const from = Math.max(1, Math.floor(params.from ?? 1));
         const lines = Math.max(1, Math.floor(params.lines ?? 200));
-        const slice = all.slice(from - 1, from - 1 + lines);
-        const nextFrom = from - 1 + lines < all.length ? from + lines : undefined;
+        const abs = path.join(this.workspaceDir, params.relPath);
+        try {
+            const raw = await fsp.readFile(abs, "utf8");
+            const all = raw.split(/\r?\n/);
+            const slice = all.slice(from - 1, from - 1 + lines);
+            const nextFrom = from - 1 + lines < all.length ? from + lines : undefined;
+            return {
+                text: slice.join("\n"),
+                path: params.relPath,
+                truncated: nextFrom != null,
+                from,
+                lines: slice.length,
+                nextFrom,
+            };
+        }
+        catch (err) {
+            const code = err.code;
+            if (code !== "ENOENT") {
+                throw err;
+            }
+        }
+        const chunks = getIndexedChunksForLineRange(this.db, {
+            relPath: params.relPath,
+            from,
+            lines,
+        });
+        if (chunks.length === 0) {
+            const indexed = listIndexedRelPaths(this.db).includes(params.relPath);
+            if (indexed) {
+                throw new Error(`memory-zvec: no indexed lines for ${params.relPath} at from=${from} lines=${lines} (file missing on disk)`);
+            }
+            throw new Error(`memory-zvec: path not found: ${params.relPath}`);
+        }
+        const text = chunks.map((c) => c.text).join("\n\n");
+        const lastEnd = chunks[chunks.length - 1].endLine;
+        const nextFrom = lastEnd >= from + lines - 1 ? from + lines : undefined;
         return {
-            text: slice.join("\n"),
+            text,
             path: params.relPath,
             truncated: nextFrom != null,
             from,
-            lines: slice.length,
+            lines: chunks.length,
             nextFrom,
         };
     }

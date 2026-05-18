@@ -267,6 +267,9 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
 | `captureMaxChars` / `recallMaxChars` | Length limits for capture and recall query text. |
 | `dreaming` | Nightly (cron) promotion of recent `memory/*.md` chunks into `MEMORY.md` + optional report under `memory/dreaming/`. `enabled: true`, `frequency` cron (default `0 3 * * *`). Uses OpenClaw cron + isolated agent turn (same pattern as memory-core). |
+| `smartExtraction` | Parsed for config parity; **not implemented** — startup warns if `enabled: true`. |
+
+**Index maintenance:** each `sync`/`index` prunes orphaned files from SQLite + Zvec, reconciles missing vectors, and sets `status.dirty` while indexing. `memory_get` uses the workspace file when present, otherwise indexed chunks.
 
 ### Troubleshooting
 

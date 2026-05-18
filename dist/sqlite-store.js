@@ -96,6 +96,42 @@ export function deleteChunksForFile(db, relPath) {
         db.prepare(`DELETE FROM memory_chunks_fts WHERE id = ?`).run(row.id);
     }
 }
+/** Remove SQLite + FTS rows for a file and drop its file-state row. Returns removed chunk ids. */
+export function deleteFileIndex(db, relPath) {
+    const ids = db
+        .prepare(`SELECT id FROM memory_chunks WHERE rel_path = ?`)
+        .all(relPath);
+    deleteChunksForFile(db, relPath);
+    db.prepare(`DELETE FROM memory_files WHERE rel_path = ?`).run(relPath);
+    return ids.map((row) => row.id);
+}
+export function listIndexedRelPaths(db) {
+    const rows = db.prepare(`SELECT rel_path AS relPath FROM memory_files`).all();
+    return rows.map((r) => r.relPath);
+}
+/** Chunks overlapping a 1-based line window (for memory_get when the file is missing on disk). */
+export function getIndexedChunksForLineRange(db, params) {
+    const from = Math.max(1, Math.floor(params.from));
+    const to = from + Math.max(1, Math.floor(params.lines)) - 1;
+    const rows = db
+        .prepare(`SELECT id, rel_path as relPath, start_line as startLine, end_line as endLine, text,
+              updated_at_ms as updatedAtMs, scope as scope
+       FROM memory_chunks
+       WHERE rel_path = ?
+         AND start_line <= ?
+         AND end_line >= ?
+       ORDER BY start_line ASC`)
+        .all(params.relPath, to, from);
+    return rows.map((row) => ({
+        id: row.id,
+        relPath: row.relPath,
+        startLine: row.startLine,
+        endLine: row.endLine,
+        text: row.text,
+        updatedAtMs: typeof row.updatedAtMs === "bigint" ? Number(row.updatedAtMs) : row.updatedAtMs,
+        scope: row.scope ?? "global",
+    }));
+}
 export function deleteChunkById(db, id) {
     const row = getChunkById(db, id);
     if (!row) {
@@ -199,7 +235,6 @@ export function stats(db) {
     const chunkRow = db.prepare(`SELECT COUNT(*) AS c FROM memory_chunks`).get();
     const files = typeof fileRow?.c === "bigint" ? Number(fileRow.c) : Number(fileRow?.c ?? 0);
     const chunks = typeof chunkRow?.c === "bigint" ? Number(chunkRow.c) : Number(chunkRow?.c ?? 0);
-    // Minimal dirty signal: always false; real `memory-core` tracks in-progress indexing.
     return { files, chunks, dirty: false };
 }
 //# sourceMappingURL=sqlite-store.js.map

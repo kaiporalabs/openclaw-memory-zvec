@@ -283,6 +283,11 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-zvec: registered (data: ${resolvedDataRoot}, dim=${vectorDim}, lazy Zvec init)`);
+    if (cfg.smartExtraction.enabled) {
+      api.logger.warn(
+        "memory-zvec: smartExtraction.enabled is not implemented yet; auto-capture uses heuristic rules only (memory-core parity pending).",
+      );
+    }
 
     // Register full memory capability so OpenClaw status/CLI/tools can resolve the active memory runtime.
     // getMemorySearchManager must not throw: gateway `doctor.memory.status` has no outer catch.
@@ -776,6 +781,32 @@ export default definePluginEntry({
               return;
             }
             console.log(JSON.stringify(run.value, null, 2));
+          });
+
+        root
+          .command("get")
+          .description("Read a workspace memory file segment (disk, or indexed fallback)")
+          .argument("<path>", "Workspace-relative path")
+          .option("--agent <id>", "Agent id", "main")
+          .option("--from <n>", "1-indexed start line", "1")
+          .option("--lines <n>", "Line count", "200")
+          .action(async (filePath, opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            const relPath = resolveMemoryGetRelPath({ path: filePath });
+            const run = await withMemoryManager(agentId, undefined, "cli", async (manager) =>
+              manager.readFile({
+                relPath,
+                from: Number(opts.from),
+                lines: Number(opts.lines),
+              }),
+            );
+            if (!run.ok) {
+              console.log(JSON.stringify({ ok: false, error: run.error }, null, 2));
+              process.exitCode = 1;
+              return;
+            }
+            console.log(run.value.text);
           });
 
         root

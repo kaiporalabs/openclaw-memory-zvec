@@ -5,6 +5,20 @@ All notable changes to `@kaiporalabs/openclaw-memory-zvec` are documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-05-18
+
+### Added
+
+- **`memory-zvec get`** CLI command (parity with `openclaw memory get`).
+- Sync summary log line (`sync complete` with file/chunk/zvec counts).
+
+### Fixed
+
+- **Index parity:** `sync` prunes SQLite/FTS/Zvec entries for files removed from the workspace; reconciles missing Zvec vectors after each sync.
+- **`memory_get`:** reads from disk when present; falls back to indexed chunks when the file is missing (memory-core store behavior).
+- **`status.dirty`:** reflects in-progress indexing during `sync`.
+- Warn at startup when `smartExtraction.enabled` is set (not implemented yet).
+
 ## [2.1.0] - 2026-05-17
 
 ### Added
@@ -100,6 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release: Zvec ANN storage, `memory_recall` / `memory_store` / `memory_forget`, auto-recall/capture hooks, Ollama-friendly embeddings.
 
+[2.2.0]: https://github.com/kaiporalabs/openclaw-memory-zvec/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/kaiporalabs/openclaw-memory-zvec/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/kaiporalabs/openclaw-memory-zvec/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/kaiporalabs/openclaw-memory-zvec/compare/v1.2.2...v2.0.0

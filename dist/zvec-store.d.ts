@@ -33,6 +33,8 @@ export declare class MemoryZvecStore {
     list(limit?: number, orderByCreatedAt?: boolean): Promise<MemoryListEntry[]>;
     delete(id: string): Promise<boolean>;
     count(): Promise<number>;
+    /** Ids tracked in memory-ids.json (may differ from collection docCount until reconcile). */
+    listKnownIds(): string[];
     close(): Promise<void>;
 }
 //# sourceMappingURL=zvec-store.d.ts.map

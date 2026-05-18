@@ -239,6 +239,10 @@ export class MemoryZvecStore {
         await this.ensureInitialized();
         return this.collection.stats.docCount;
     }
+    /** Ids tracked in memory-ids.json (may differ from collection docCount until reconcile). */
+    listKnownIds() {
+        return [...new Set(this.loadIdList())];
+    }
     async close() {
         if (this.collection) {
             try {
