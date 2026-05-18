@@ -6,6 +6,8 @@ export declare function appendMemoryNote(params: {
     category?: MemoryCategory;
     nowMs?: number;
     cfg?: OpenClawConfig;
+    smartExtraction?: boolean;
+    captureMaxChars?: number;
 }): Promise<{
     relPath: string;
     appended: boolean;

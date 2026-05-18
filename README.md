@@ -94,7 +94,7 @@ Example fragment:
 }
 ```
 
-**`smartExtraction`** is parsed for forward compatibility; LLM-based extraction is not enabled in this release.
+**`smartExtraction`:** when `enabled: true`, auto-capture and `memory_store` normalize long lines (trim role prefixes, cap length). This is a lightweight pass — not the full LLM extraction pipeline from memory-core.
 
 ## Diagnostics & logging
 
@@ -267,7 +267,7 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | `autoCapture` | Heuristic capture from user lines after each successful turn (default `false`). |
 | `captureMaxChars` / `recallMaxChars` | Length limits for capture and recall query text. |
 | `dreaming` | Nightly cron sweep: diary in `DREAMS.md`, short-term staging in `memory/.dreams/`, qualified excerpts to `MEMORY.md` (score ≥ deep `minScore`), optional `memory/dreaming/report-*.md`. Uses OpenClaw cron (same pattern as memory-core). |
-| `smartExtraction` | Parsed for config parity; **not implemented** — startup warns if `enabled: true`. |
+| `smartExtraction` | Lightweight capture normalization when `enabled: true` (no LLM pass). |
 
 **Index maintenance:** each `sync`/`index` prunes orphaned files from SQLite + Zvec, reconciles missing vectors, and sets `status.dirty` while indexing. `memory_get` uses the workspace file when present, otherwise indexed chunks.
 
@@ -280,6 +280,13 @@ When `provider` is `openai` **and** `apiKey` is set under **`config.embedding`**
 | **After upgrade to 2.0.1+, empty search for old data** | Default Zvec path moved to `~/.openclaw/memory/zvec/<agentId>`. Either set `config.dbPath` to your old `~/.openclaw/memory/zvec` or move/copy the collection into the per-agent folder and run `memory-zvec index`. |
 
 ## CLI
+
+Grounded backfill (memory-core CLI parity):
+
+```bash
+openclaw memory rem-backfill --path memory --stage-short-term --agent main
+openclaw memory rem-backfill --rollback-short-term --agent main
+```
 
 Plugin-local commands (always registered under **`memory-zvec`**, no clash with bundled extensions):
 

@@ -1,13 +1,16 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveDailyMemoryRelPath } from "./memory-date.js";
+import { formatSmartCaptureLine } from "./smart-extraction.js";
 export async function appendMemoryNote(params) {
     const relPath = resolveDailyMemoryRelPath({ cfg: params.cfg, nowMs: params.nowMs });
     const absPath = path.join(params.workspaceDir, relPath);
     const category = params.category ?? "other";
     const nowMs = params.nowMs ?? Date.now();
-    const iso = new Date(nowMs).toISOString();
-    const line = `- [${category}] ${iso} ${params.text.trim()}\n`;
+    const maxChars = params.captureMaxChars ?? 500;
+    const line = params.smartExtraction
+        ? `${formatSmartCaptureLine({ text: params.text, category, nowMs, maxChars })}\n`
+        : `- [${category}] ${new Date(nowMs).toISOString()} ${params.text.trim()}\n`;
     await fsp.mkdir(path.dirname(absPath), { recursive: true });
     let existing = "";
     try {

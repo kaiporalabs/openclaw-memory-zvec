@@ -27,6 +27,7 @@ import type {
 import { resolvePluginAgentId } from "./agent-context.js";
 import { buildMemoryZvecFlushPlan } from "./flush-plan.js";
 import { appendMemoryNote } from "./markdown-memory.js";
+import { runRemBackfill } from "./rem-backfill.js";
 import { resolveMemoryGetRelPath } from "./memory-get-params.js";
 import {
   defaultZvecDataRootFromCfg,
@@ -284,8 +285,8 @@ export default definePluginEntry({
 
     api.logger.info(`memory-zvec: registered (data: ${resolvedDataRoot}, dim=${vectorDim}, lazy Zvec init)`);
     if (cfg.smartExtraction.enabled) {
-      api.logger.warn(
-        "memory-zvec: smartExtraction.enabled is not implemented yet; auto-capture uses heuristic rules only (memory-core parity pending).",
+      api.logger.info(
+        "memory-zvec: smartExtraction enabled (lightweight capture normalization; no LLM extraction pass).",
       );
     }
 
@@ -498,6 +499,7 @@ export default definePluginEntry({
           void params;
           const agentId = resolveToolAgentId(ctx);
           const baseCfg = getRuntimeCfg();
+          const storeCfg = resolveCurrentHookConfig(agentId);
           const run = await withMemoryManager(agentId, ctx.sessionKey, "default", async (manager) => {
             const dupes = await manager.search(text, { maxResults: 1, minScore: 0.95 });
             if (dupes.length > 0) {
@@ -512,6 +514,8 @@ export default definePluginEntry({
               text,
               category,
               cfg: baseCfg,
+              smartExtraction: storeCfg.smartExtraction.enabled,
+              captureMaxChars: storeCfg.captureMaxChars,
             });
             await manager.sync?.({ reason: "memory_store", force: false });
             return { action: "created" as const, relPath: written.relPath };
@@ -734,6 +738,43 @@ export default definePluginEntry({
         );
       } finally {
         await manager.close?.().catch(() => undefined);
+      }
+    };
+
+    const runRemBackfillCli = async (
+      agentId: string,
+      opts: {
+        path?: string;
+        stageShortTerm?: boolean;
+        rollback?: boolean;
+        rollbackShortTerm?: boolean;
+      },
+    ) => {
+      const baseCfg = getRuntimeCfg();
+      const workspaceDirRaw = api.runtime.agent.resolveAgentWorkspaceDir(baseCfg, agentId);
+      const workspaceDir =
+        typeof workspaceDirRaw === "string" && workspaceDirRaw.trim().length > 0
+          ? workspaceDirRaw
+          : path.resolve(process.cwd());
+      const result = await runRemBackfill({
+        workspaceDir,
+        memoryPath: typeof opts.path === "string" ? opts.path : "memory",
+        stageShortTerm: opts.stageShortTerm !== false,
+        rollback: Boolean(opts.rollback),
+        rollbackShortTerm: Boolean(opts.rollbackShortTerm),
+      });
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) {
+        process.exitCode = 1;
+        return;
+      }
+      if (!opts.rollback && !opts.rollbackShortTerm) {
+        const run = await withMemoryManager(agentId, undefined, "cli", async (manager) => {
+          await manager.sync?.({ reason: "rem-backfill", force: false });
+        });
+        if (!run.ok) {
+          api.logger.warn?.(`memory-zvec: rem-backfill index sync failed: ${run.error}`);
+        }
       }
     };
 
@@ -1007,6 +1048,20 @@ export default definePluginEntry({
               typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
             await printCliMemoryStatus(agentId, Boolean(opts.json));
           });
+
+        root
+          .command("rem-backfill")
+          .description("Grounded historical backfill into memory/.dreams + DREAMS.md (memory-core CLI parity)")
+          .option("--agent <id>", "Agent id", "main")
+          .option("--path <dir>", "Workspace-relative memory path", "memory")
+          .option("--stage-short-term", "Stage candidates into memory/.dreams", true)
+          .option("--rollback", "Remove staged rem-backfill artifacts and DREAMS section", false)
+          .option("--rollback-short-term", "Remove staged memory/.dreams rem-backfill files only", false)
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            await runRemBackfillCli(agentId, opts);
+          });
       },
       { commands: ["memory-zvec"] },
     );
@@ -1084,6 +1139,20 @@ export default definePluginEntry({
               throw new Error(run.error);
             }
             console.log(run.value.text);
+          });
+
+        memory
+          .command("rem-backfill")
+          .description("Grounded historical backfill into memory/.dreams + DREAMS.md")
+          .option("--agent <id>", "Agent id", "main")
+          .option("--path <dir>", "Workspace-relative memory path", "memory")
+          .option("--stage-short-term", "Stage candidates into memory/.dreams", true)
+          .option("--rollback", "Remove staged rem-backfill artifacts and DREAMS section", false)
+          .option("--rollback-short-term", "Remove staged memory/.dreams rem-backfill files only", false)
+          .action(async (opts) => {
+            const agentId =
+              typeof opts.agent === "string" && opts.agent.trim().length > 0 ? opts.agent.trim() : "main";
+            await runRemBackfillCli(agentId, opts);
           });
       },
       { commands: ["memory"] },
@@ -1210,6 +1279,8 @@ export default definePluginEntry({
                   text,
                   category,
                   cfg: baseCfg,
+                  smartExtraction: currentCfg.smartExtraction.enabled,
+                  captureMaxChars: currentCfg.captureMaxChars,
                 });
                 if (!note.appended) {
                   return false;

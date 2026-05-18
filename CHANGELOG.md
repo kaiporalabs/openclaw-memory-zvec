@@ -5,6 +5,13 @@ All notable changes to `@kaiporalabs/openclaw-memory-zvec` are documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-05-18
+
+### Added
+
+- **`smartExtraction`:** lightweight capture normalization when enabled (trim prefixes, sentence cap).
+- **`openclaw memory rem-backfill`** and **`openclaw memory-zvec rem-backfill`** — grounded backfill into `memory/.dreams/` + `DREAMS.md`, with `--rollback` / `--rollback-short-term`.
+
 ## [2.3.0] - 2026-05-18
 
 ### Changed
@@ -122,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release: Zvec ANN storage, `memory_recall` / `memory_store` / `memory_forget`, auto-recall/capture hooks, Ollama-friendly embeddings.
 
+[2.4.0]: https://github.com/kaiporalabs/openclaw-memory-zvec/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/kaiporalabs/openclaw-memory-zvec/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/kaiporalabs/openclaw-memory-zvec/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/kaiporalabs/openclaw-memory-zvec/compare/v2.0.1...v2.1.0
